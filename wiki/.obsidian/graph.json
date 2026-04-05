@@ -1,0 +1,39 @@
+{
+  "collapse-filter": false,
+  "search": "-path:chunks/",
+  "showTags": false,
+  "showAttachments": false,
+  "hideUnresolved": false,
+  "showOrphans": true,
+  "collapse-color-groups": false,
+  "colorGroups": [
+    {
+      "query": "path:concepts/",
+      "color": { "a": 1, "rgb": 3381759 }
+    },
+    {
+      "query": "path:explorations/",
+      "color": { "a": 1, "rgb": 4390939 }
+    },
+    {
+      "query": "path:conflicts/",
+      "color": { "a": 1, "rgb": 16737843 }
+    },
+    {
+      "query": "file:_index OR file:_summaries OR file:gaps",
+      "color": { "a": 1, "rgb": 16763904 }
+    }
+  ],
+  "collapse-display": false,
+  "showArrow": true,
+  "textFadeMultiplier": 0,
+  "nodeSizeMultiplier": 1.2,
+  "lineSizeMultiplier": 1,
+  "collapse-forces": false,
+  "centerStrength": 0.5,
+  "repelStrength": 10,
+  "linkStrength": 1,
+  "linkDistance": 30,
+  "scale": 1,
+  "close": false
+}

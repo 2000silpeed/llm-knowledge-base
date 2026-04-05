@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+dist/
+build/
+*.egg-info/
+
+# 환경변수
+.env
+.env.*
+
+# 시스템
+.DS_Store
+*.log
+.kb.log
+
+# 지식베이스 런타임 파일
+.kb_hashes.json
+wiki/chunks/*/
+
+# Obsidian 자동 생성
+wiki/.obsidian/workspace.json
+wiki/.obsidian/workspace-mobile.json
+
+# 테스트 캐시
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 에디터
+.vscode/
+.idea/
+*.swp

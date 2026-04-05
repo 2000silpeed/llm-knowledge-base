@@ -1,0 +1,49 @@
+# LLM 지식 베이스 시스템 설정
+# ⚠️  모델을 바꿀 때는 llm 섹션만 수정하면 전체 파이프라인이 자동 적응됩니다.
+
+llm:
+  model: claude-sonnet-4-6
+  context_limit: 200000     # 실제 모델 입력 한도 (토큰)
+  output_reserved: 8000     # LLM 출력용 예약 토큰
+  prompt_reserved: 3000     # 시스템 프롬프트용 예약 토큰
+  # → 가용 컨텐츠 토큰: 189,000  (자동 계산: context_limit - output_reserved - prompt_reserved)
+  temperature: 0.3          # 위키 생성은 일관성 우선 → 낮게 설정
+  api_key_env: ANTHROPIC_API_KEY
+
+# 소형 모델 예시 (아래 주석 해제 후 위 llm 블록과 교체)
+# llm:
+#   model: claude-haiku-4-5-20251001
+#   context_limit: 48000
+#   output_reserved: 4000
+#   prompt_reserved: 2000
+#   # → 가용 컨텐츠 토큰: 42,000
+#   temperature: 0.3
+#   api_key_env: ANTHROPIC_API_KEY
+
+chunking:
+  # 청킹 전략 임계값 (가용 토큰 대비 비율)
+  single_pass_threshold: 0.80    # ≤ 80%  → 단일 패스 (그대로 전달)
+  map_reduce_threshold: 3.00     # ≤ 300% → Map-Reduce 청크 분할
+  # 300% 초과 → 계층적 요약 트리
+
+  overlap_tokens: 200            # 청크 간 overlap (앞 청크 마지막 200토큰)
+  min_chunk_tokens: 500          # 최소 청크 크기 (너무 잘게 쪼개기 방지)
+
+  # Office 파일별 청킹 단위
+  excel_rows_per_chunk: 1000     # Excel: 시트 내 행 기준
+  ppt_slides_per_chunk: 10       # PPT: 슬라이드 단위
+
+paths:
+  raw: raw
+  wiki: wiki
+  config: config
+  scripts: scripts
+  hash_store: .kb_hashes.json    # 증분 컴파일용 파일 해시 저장 경로
+
+ingest:
+  image_download: true           # 외부 이미지 URL → 로컬 raw/images/ 저장 여부
+  vision_caption: true           # 이미지 → Claude Vision API 캡션 자동 생성
+
+logging:
+  level: INFO                    # DEBUG / INFO / WARNING / ERROR
+  file: .kb.log

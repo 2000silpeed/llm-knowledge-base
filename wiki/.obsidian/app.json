@@ -1,0 +1,16 @@
+{
+  "useMarkdownLinks": false,
+  "newLinkFormat": "shortest",
+  "attachmentFolderPath": "../raw/images",
+  "promptDelete": true,
+  "trashOption": "system",
+  "readableLineLength": true,
+  "showFrontmatter": false,
+  "strictLineBreaks": false,
+  "foldHeading": false,
+  "foldIndent": false,
+  "defaultViewMode": "preview",
+  "livePreview": true,
+  "vimMode": false,
+  "tabSize": 4
+}

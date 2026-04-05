@@ -1,0 +1,469 @@
+# handoff.md — 완료 작업 핸드오프 기록
+
+> 세션 간 연속성 유지용. 새 세션 시작 시 마지막 항목부터 읽을 것.
+> 형식: `## HO-{번호} | {날짜} | {태스크 ID}`
+
+---
+
+## HO-001 | 2026-04-05 | 기획
+
+**완료:** 프로젝트 기획 및 문서 체계 수립
+- `LLM_지식베이스_기획서.md` — 전체 설계 원본 (기술스택, 4단계 파이프라인, 로드맵, 청킹전략 포함)
+- `CLAUDE.md` — 작업 규약 및 설계 원칙
+- `task.md` — Phase 1~3 전체 태스크 목록
+- `handoff.md` — 이 파일
+
+**결정사항:**
+- RAG(벡터DB) 사용하지 않음 → 마크다운 인덱스 파일로 대체 (Karpathy 검증 방식)
+- 모델 독립 설계: `settings.yaml`의 `context_limit` 하나로 전체 청킹/컨텍스트 로직 적응
+- 청킹 3단계: 단일패스(≤80%) / Map-Reduce(80~300%) / 계층트리(300%+)
+- `raw/` 절대 수정 금지 원칙 확정
+- Office 파일(Excel/PPT/Word) MVP 범위에 포함 (W1-03~05)
+
+**주의:**
+- 기획서에 `3.2-B` 섹션이 청킹 전략 전체를 담고 있음 — 구현 시 반드시 참조
+- `settings.yaml`의 `context_limit`은 모델의 입력+출력 합산 한도가 아닌 **입력 한도** 기준으로 설정할 것
+- Excel 인제스터(W1-03)가 청킹 엔진(W1-06)에 의존 → W1-06 먼저 설계 후 W1-03~05 구현 권장
+
+**다음:** INFRA-01 (프로젝트 디렉토리 구조 + pyproject.toml + settings.yaml 초안)
+
+---
+
+## HO-003 | 2026-04-05 | INFRA-02
+
+**완료:** 토큰 카운터 유틸리티 구현
+- `scripts/__init__.py` — 패키지 초기화
+- `scripts/token_counter.py` — 토큰 추정/예산/청킹 전략 판단 전체 구현
+
+**결정사항:**
+- 토큰 추정: `len(text.encode("utf-8")) / 4` 방식 채택
+  - 영문(~1바이트/글자)과 한글(~3바이트/글자) 모두 동일 공식 적용 가능
+  - API 호출 없이 로컬 추정, ±15% 오차로 전략 결정에 충분
+- 청킹 전략: settings.yaml의 `single_pass_threshold`(0.8) / `map_reduce_threshold`(3.0) 기준 자동 분기
+- 핵심 함수: `estimate_tokens`, `get_available_tokens`, `get_chunking_strategy`, `token_budget_report`, `file_budget_report`
+
+**주의:**
+- `estimate_tokens()`는 바이트 기반 추정 — 실제 Claude 토큰 수와 ±15% 오차 가능
+- `load_settings()`는 경로 미지정 시 `config/settings.yaml` 자동 참조 (프로젝트 루트 기준)
+- W1-06 청킹 엔진에서 이 모듈의 `calculate_chunks_needed()`, `get_chunking_strategy()` 를 그대로 사용할 것
+
+**다음:** W1-01 (웹 아티클 인제스터)
+
+---
+
+## HO-004 | 2026-04-05 | W1-01
+
+**완료:** 웹 아티클 인제스터 구현
+- `scripts/ingest_web.py` — URL → 마크다운 변환 + 이미지 다운로드 + raw/articles/ 저장
+
+**결정사항:**
+- trafilatura `fetch_url()` + `extract(with_metadata=False)` 조합 — 자체 frontmatter 중복 방지
+- 이미지 다운로드: `requests` 사용, URL MD5 해시로 파일명 (중복 방지)
+- 제목 중복 처리: trafilatura가 본문 첫 줄에 H1 포함 → 자동 제거 후처리 적용
+- 파일명 충돌: 동일 슬러그 존재 시 URL 해시 6자리 접미사 추가
+- `requests` 의존성을 `pyproject.toml`에 명시 추가
+
+**주의:**
+- `trafilatura.extract_metadata()` 는 일부 사이트에서 title 빈 값 반환 가능 → 빈 경우 URL 슬러그로 fallback
+- settings.yaml `ingest.image_download: false` 시 이미지 다운로드 건너뜀
+- 이미지 URL이 `/assets/...` 같은 상대경로면 마크다운에 그대로 남음 (외부 절대 URL만 처리)
+
+**다음:** W1-02 (PDF 인제스터)
+
+---
+
+## HO-006 | 2026-04-05 | W1-06
+
+**완료:** 청킹 엔진 구현
+- `scripts/chunking.py` — 마크다운 문서 분할 전체 로직
+
+**결정사항:**
+- 헤딩 기반 1차 분할 → 섹션 단위 팩킹 → 단락/문장 단위 폴백 (3단계 분할 계층)
+- 청크 헤더 형식: `[문서명 / 섹션명 / N개 중 K번째]`
+- overlap: 이전 청크 마지막 부분을 `<!-- overlap --> ... <!-- /overlap -->` 블록으로 삽입
+- hierarchical 전략: chunk_size_ratio=0.4 (40%)로 작게 쪼개고, L1 그룹 번호(group 필드) 부여
+  - 컴파일러(W2-02)는 group 번호로 묶어 계층 요약 수행
+- `save_chunks()` 호출 시 `.meta.yaml` 자동 생성 (각 청크의 섹션명, 토큰 수, level/group 기록)
+- 퍼블릭 API 3종: `chunk_document()`, `save_chunks()`, `chunk_file()`
+
+**주의:**
+- `_overlap_tail()` 은 바이트 기준 역산이므로 정확히 overlap_tokens 토큰이 아닐 수 있음 (±10%)
+- single_pass 전략도 청크 헤더 삽입됨 → 컴파일러가 일관된 형식으로 처리 가능
+- `chunk_file(save=True)` 시 기본 출력 경로는 `wiki/chunks/{doc_name}/`
+
+**다음:** W1-03 (Excel 인제스터)
+
+---
+
+## HO-005 | 2026-04-05 | W1-02
+
+**완료:** PDF 인제스터 구현
+- `scripts/ingest_pdf.py` — PDF → 마크다운 변환 + 이미지 추출 + raw/papers/ 저장
+
+**결정사항:**
+- 폰트 크기 분석: 문서 전체에서 가장 많이 등장하는 크기를 body로 삼고, ×1.1/×1.2/×1.5 배율로 H3/H2/H1 임계값 자동 계산
+- 짧은 굵은 텍스트(< 120자) → `**bold**` 소제목 처리 (헤딩 레벨 미달 시)
+- 이미지 중복 방지: 바이트 MD5 해시로 파일명 결정 (URL MD5와 동일 전략)
+- 페이지 구분자: 각 페이지 사이 `---` 수평선 삽입
+- Vision 캡션: `settings.yaml`의 `ingest.vision_caption` 플래그로 on/off
+
+**주의:**
+- `fitz.open()` 으로 PDF를 열 때 암호화된 파일은 실패함 → 별도 처리 없음 (error 반환)
+- 스캔 PDF(이미지 기반) 는 텍스트 추출 불가 → 이미지 추출 + Vision 캡션만 가능
+- `_get_font_stats()`는 전체 문서를 두 번 순회 (1번: 통계, 2번: 변환) — 대용량 PDF 주의
+
+**다음:** W1-06 (청킹 엔진) 또는 W1-03 (Excel 인제스터)
+- HO-001 주의: Excel/PPT/Word 인제스터(W1-03~05)는 W1-06에 의존 → W1-06 먼저 권장
+
+---
+
+## HO-008 | 2026-04-05 | W1-04
+
+**완료:** PowerPoint 인제스터 구현
+- `scripts/ingest_ppt.py` — .pptx → 마크다운 변환 + raw/office/ 저장
+
+**결정사항:**
+- 슬라이드 헤딩: `## Slide N: 제목` 형식
+- 도형 처리 우선순위: 이미지 → 테이블 → 텍스트 순
+- 폰트 크기 기반 헤딩 추정: ≥28pt → `###`, ≥20pt → `####`, 그 외 텍스트
+- 발표자 노트: `> **Note:**\n> ...` 블록쿼트 형식
+- 청킹: 10슬라이드 단위, 각 청크 앞에 전체 목차(TOC) 반복 삽입
+- 청크 경계 마커: `<!-- chunk N/M: Slide X–Y -->` HTML 주석
+- 이미지: MD5 해시로 파일명, `raw/images/` 저장
+- Vision 캡션: `vision_caption` 플래그 on/off
+- 제목: `prs.core_properties.title` 우선, 없으면 파일명
+
+**주의:**
+- `placeholder_format.idx 0,1`이 제목 플레이스홀더 — 일부 테마는 다른 idx 사용 가능
+- `.ppt` (구형 바이너리) 포맷은 python-pptx 미지원 → 에러 반환
+- 슬라이드 이미지 도형이 그룹화된 경우 개별 이미지 추출 안 됨 (MSO_SHAPE_TYPE.PICTURE만 처리)
+
+**다음:** W1-05 (Word 인제스터)
+
+---
+
+## HO-009 | 2026-04-05 | W1-05
+
+**완료:** Word 인제스터 구현
+- `scripts/ingest_word.py` — .docx → 마크다운 변환 + raw/office/ 저장
+
+**결정사항:**
+- 헤딩: `para.style.name` 소문자 비교 → "heading 1~6" → #~######
+- 표: `doc.element.body` XML 직접 순회로 단락/표 혼합 순서 보존 (`Document.paragraphs`는 표 건너뜀)
+- 각주/미주: `doc.part.part_related_by(rel_type)` → XML iter로 텍스트 추출, 문서 하단에 `[^N]: ...` 형식 모음
+- 런 기반 텍스트: bold/italic → **/***/*** 처리
+- H2 단위 청킹: `_split_at_h2()` → `_build_chunks()`, `min_chunk_tokens` 미만 섹션은 다음 섹션과 병합
+- overlap: `_overlap_tail(prev_body, overlap_tokens)` → `<!-- overlap --> ... <!-- /overlap -->` 블록으로 삽입
+- 제목 우선순위: `core_properties.title` → 첫 번째 Heading 1 → 파일명
+
+**주의:**
+- `.doc` (구형 바이너리) 포맷은 python-docx 미지원 → 명확한 에러 메시지 반환
+- `_get_notes()` 는 각주 id ≤ 0 (구분자 각주) 자동 건너뜀
+- 리스트 스타일 감지: style name에 "list bullet" / "list number" / "list paragraph" 포함 여부 기반
+  - 일부 템플릿은 다른 스타일명 사용 가능 → 오탐 시 일반 단락으로 fallback
+- `_runs_to_text()` fallback: 런이 비어 있으면 `para.text` 사용
+
+**다음:** W2-01 (단일 문서 컴파일러)
+
+---
+
+## HO-010 | 2026-04-05 | W2-01
+
+**완료:** 단일 문서 컴파일러 구현
+- `scripts/compile.py` — 마크다운 문서 → LLM → wiki/concepts/ 항목 생성
+
+**결정사항:**
+- `compile_document(path)` — 파일 기반 진입점, `compile_text(text)` — 텍스트 직접 처리
+- `{{ variable }}` 형식 템플릿 치환: `re.sub` 기반 `_render()` 함수 (Jinja2 의존 없음)
+- LLM 출력에서 마크다운 코드 펜스(`` ```markdown ... ``` ``) 자동 제거 후 저장
+- 개념명: H1 제목 기준 자동 추출 → 파일명(`_concept_to_filename()`)으로 변환
+- 파일명 충돌: 내용이 같으면 덮어쓰기(갱신), 다르면 `_2`, `_3` 접미사
+- single_pass 전략만 담당 — map_reduce/hierarchical은 `ValueError` 발생시켜 W2-02 유도
+- CLI: `python -m scripts.compile <파일>` → JSON 출력
+
+**주의:**
+- `ANTHROPIC_API_KEY` 환경변수 필수 (settings.yaml의 `api_key_env` 참조)
+- `_render()` 는 `{{ key }}`만 치환, 미등록 키는 원문 유지
+- `compile_document()` 는 `raw/` 원본을 수정하지 않음 (읽기만)
+- wiki_root 기본값은 프로젝트 루트 / `settings.yaml paths.wiki`
+
+**다음:** W2-02 (청크 Map-Reduce 컴파일러)
+
+---
+
+## HO-012 | 2026-04-05 | W2-03
+
+**완료:** 인덱스 자동 갱신 구현
+- `scripts/index_updater.py` — _index.md / _summaries.md LLM 갱신 + 백링크 삽입
+- `scripts/compile.py` — `compile_document()` / `compile_text()`에 `update_index=True` 파라미터 추가, 완료 후 자동 호출
+
+**결정사항:**
+- `update_all()` 이 세 작업(index, summaries, backlinks)을 순차 실행 — 각각 skip 플래그로 선택적 비활성화 가능
+- 백링크 삽입은 LLM 없이 `[[개념]]` 정규식 파싱으로 처리 (비용/속도 우위)
+- 역방향 백링크: 새 항목 A가 [[B]]를 언급하면 B.md에 `- [[A]] — 역참조` 삽입
+- `_find_concept_file()` 2단계 탐색: 파일명 직접 매칭 → H1 개념명 전체 스캔 (언더스코어 변환 불일치 대비)
+- 컴파일 실패와 인덱스 갱신 실패를 분리 — 갱신 실패 시 `logger.warning`만 기록, 컴파일 결과는 반환
+- `_update_frontmatter_date()`: LLM 출력의 `last_updated` 를 실제 오늘 날짜로 강제 수정
+
+**주의:**
+- `insert_backlinks()`는 `[[개념]]` 이 `wiki/concepts/` 에 실제 파일로 존재할 때만 삽입 — 없는 개념은 `skipped` 처리
+- `'## 관련 개념'` 섹션이 없는 파일에는 파일 끝에 섹션 자체를 새로 생성
+- 중복 백링크 방지: `_has_backlink()` 로 사전 확인 후 건너뜀
+
+**다음:** W2-04 (증분 컴파일러)
+
+---
+
+## HO-013 | 2026-04-05 | W2-04
+
+**완료:** 증분 컴파일러 구현
+- `scripts/incremental.py` — 해시 감시 / 선택적 재컴파일 / 충돌 감지 / watchdog 전체 구현
+- `config/prompts.yaml` — `detect_conflict` 프롬프트 추가
+- `wiki/conflicts/` 디렉토리 생성
+
+**결정사항:**
+- 해시 스토어: SHA256, `.kb_hashes.json` (settings.yaml `paths.hash_store` 참조)
+- 관련 개념 탐색: wiki/concepts/*.md frontmatter의 `source_files` 필드 스캔 (2단계 경로 정규화)
+- 충돌 감지: 변경 파일(`modified`) 한정 실행 — 신규 파일은 비교 대상 기존 wiki 없음
+  - LLM 응답이 "NONE"이면 충돌 없음으로 처리, 있으면 wiki/conflicts/ 저장
+- watchdog debounce 1초 — 연속 이벤트를 하나로 묶어 compile_changed() 호출
+- `compile_changed()` 실행 흐름: 해시 비교 → 백업 → compile_document() → 충돌 감지 → 해시 갱신
+- anthropic 임포트를 `_call_llm()` 내부로 이동 — watchdog 미설치 환경에서도 hash/conflict-free 동작 가능하도록
+
+**주의:**
+- watchdog 미설치 시 `compile_changed()`는 정상 동작, `watch()`만 ImportError 발생
+- `find_related_concepts()` 는 frontmatter `source_files` 가 없는 오래된 wiki 파일은 건너뜀
+- `detect_conflict()` 는 LLM 비용 발생 — `check_conflicts=False` 로 비활성화 가능
+- 충돌 파일명: `{날짜}_{wiki파일명}_vs_{소스파일명}.md` (각 30자 제한)
+
+**다음:** W3-01 (기본 질의 처리)
+
+---
+
+## HO-014 | 2026-04-05 | W3-01
+
+**완료:** 기본 질의 처리 엔진 구현
+- `scripts/query.py` — 우선순위 기반 컨텍스트 조립 + LLM 질의 전체 구현
+
+**결정사항:**
+- 관련도 점수: 키워드 기반 (`_score_relevance`), 파일명 매칭 가중치 2.0 / 본문 1.0
+  - RAG/벡터 없이 단순 단어 포함 여부로 처리 — Karpathy 방식 준수
+  - 한글 포함 고려: `[\w가-힣]{2,}` 정규식으로 단어 추출
+- P1(인덱스) → P2(concepts 관련도 순) → P3(explorations 관련도 순) 순으로 토큰 예산 채움
+- 토큰 예산: `get_available_tokens(settings)` 직접 사용 (token_counter.py 재사용)
+- 반환값: `{question, answer, used_files, token_budget, tokens_used, context_stats}`
+  - `context_stats`에 P1/P2/P3/skipped 분류 통계 포함 — W3-02 fallback 로직에 활용 가능
+- CLI: `python -m scripts.query "<질문>"` → 답변 + 메타 출력
+
+**주의:**
+- `build_context()`는 예산 초과 시 concept 파일을 단순 스킵 (트런케이션 없음)
+  - 트런케이션/압축 fallback은 W3-02에서 구현 — 이 함수가 그 진입점
+- P1 파일(_index.md, _summaries.md)이 없으면 조용히 건너뜀 (빈 wiki 환경 대응)
+- `_score_relevance()` 점수 0인 파일은 컨텍스트 제외 — 완전 무관 파일 필터링
+
+**다음:** W3-02 (컨텍스트 압축 fallback)
+
+---
+
+## HO-015 | 2026-04-05 | W3-02
+
+**완료:** 컨텍스트 압축 fallback 구현
+- `scripts/query.py` — `build_context_compressed()`, `_first_paragraph()`, `_query_decomposed()` 추가
+- `query()` 함수에 3단계 자동 fallback 로직 통합
+
+**결정사항:**
+- Fallback 1 (`first_para`): concept 파일을 frontmatter 제외 첫 단락(H1+바로 아래 단락)으로 잘라 포함
+  - `[압축: 첫 단락, 관련도: N.NN]` 레이블로 LLM에게 압축 사실 명시
+- Fallback 2 (`summaries_only`): 개별 concept 파일 생략, P1(_index+_summaries)만 사용
+  - 압축된 concept 파일은 `stats["compressed"]`에 기록 (추적 용)
+- Fallback 3 (서브 질문 분해): `query_decompose` → 각 서브 질문에 build_context + fallback1 → `query_merge`
+  - 재귀 방지: 서브 질문 처리는 fallback 1까지만 허용
+- 반환값에 `fallback_level` 필드 추가 (0~3)
+- CLI 출력에도 fallback 단계 표시
+
+**주의:**
+- `_query_decomposed()`는 서브 질문 수만큼 LLM 호출 발생 — 비용이 가장 비쌈
+- `query_decompose` 프롬프트 응답이 JSON 배열이 아닐 경우 원래 질문으로 단일 처리 (graceful fallback)
+- Fallback 3의 `tokens_used`는 각 서브 질문 tokens_used 합산 (근사값)
+- `build_context_compressed(mode="summaries_only")`은 P1 파일도 예산 초과 시 스킵될 수 있음
+
+**다음:** W3-03 (탐색 결과 저장)
+
+---
+
+## HO-016 | 2026-04-05 | W3-03
+
+**완료:** 탐색 결과 저장 구현
+- `scripts/exploration.py` — 신규 생성 (탐색 저장 전체 로직)
+- `scripts/query.py` — `query()` 함수에 `save=True` 파라미터 추가 + CLI `--save` 플래그
+
+**결정사항:**
+- `save_exploration(result, ...)` 가 진입점 — `query()` 결과 dict를 그대로 받음
+- LLM 호출 1회로 탐색 파일 내용 생성 (`save_exploration` 프롬프트 재사용)
+- 새 개념: `_parse_list_section(text, '발견된 새 개념')` 로 파싱 → `_create_concept_stub()` 로 stub 생성
+  - 파일명 매칭 + H1 본문 스캔 2단계 중복 확인
+  - stub에 `status: stub` frontmatter 플래그 → `kb compile` 시 식별 가능
+- 갭: `_parse_list_section(text, '추가 조사 필요')` → `_append_gaps()` — 중복 방지 포함
+- `query(save=True)` 시 `result["exploration"]` 키에 저장 메타 반환, 저장 실패는 warning만 (질의 결과 불영향)
+- `_parse_list_section()` : `^(?:[-*]\s+|\d+[.)]\s+)(.*)` 정규식으로 선두 기호 제거, `[[개념명]]` 추출, `(...)` placeholder 자동 제거
+
+**주의:**
+- `exploration.py`는 `scripts.query`를 임포트하지 않음 (순환 임포트 방지)
+- `query.py`에서 `from scripts.exploration import save_exploration`를 함수 내부에서 지연 임포트
+- 탐색 파일 파일명: `YYYY-MM-DD_{슬러그 최대40자}.md` — 충돌 시 `_2`, `_3` 접미사
+- LLM이 `발견된 새 개념` 섹션에 개념을 쓰지 않으면 stub 미생성 (graceful)
+
+**다음:** W4-01 (CLI 인터페이스)
+
+---
+
+## HO-019 | 2026-04-05 | W4-03
+
+**완료:** MVP 통합 테스트 구현 + 전체 통과 (68/68)
+- `tests/conftest.py` — fixture: `proj`(임시 프로젝트 구조), `mock_settings`, 샘플 생성 헬퍼
+- `tests/test_token_counter.py` — 16개 단위 테스트
+- `tests/test_chunking.py` — 11개 단위 테스트 (save_chunks/chunk_file 실제 API 반영)
+- `tests/test_compile.py` — 11개 단위 테스트 (mock LLM)
+- `tests/test_query.py` — 11개 단위 테스트 (mock LLM)
+- `tests/test_exploration.py` — 12개 단위 테스트 (mock LLM) + 루프 1회 검증
+- `tests/test_integration.py` — 12개 통합 테스트 (50건 인제스트 → 컴파일 → 복합질문 5개 → 탐색-재편입 루프)
+- `scripts/test_mvp.py` — CLI 실행 가능 MVP 리포터 (mock/real LLM 선택)
+
+**결정사항:**
+- 모든 LLM 호출은 `unittest.mock.patch`로 모킹 — API 키 없이 실행 가능
+- `proj` fixture는 `tmp_path` 기반 완전한 프로젝트 구조 생성 + 실제 prompts.yaml 복사
+- `test_mvp.py` 기본값: 임시 디렉토리 사용 (프로젝트 wiki/raw 오염 방지), `--project` 플래그로 실제 디렉토리 사용
+- `chunk_file()` / `save_chunks()` 반환값이 `list`가 아닌 `dict` — 초기 테스트에서 발견해 수정
+- `compile_text()`의 파라미터가 `doc_name`이 아닌 `source_label` — 마찬가지로 발견해 수정
+- `save_exploration()` 반환 키가 `exploration_path`가 아닌 `exploration_file` — 수정
+
+**주의:**
+- `tests/test_integration.py::TestExplorationLoop::test_full_loop_once` 는 50건 컴파일로 ~20초 소요
+- `test_mvp.py --project` 실행 시 실제 raw/wiki 수정됨 — 주의해서 사용
+- mock `_call_llm`은 user_prompt의 첫 `# ` 라인을 개념명으로 추출하므로, 실제 프롬프트 템플릿 구조에 따라 다른 개념명이 추출될 수 있음 (통합 테스트에서는 임시 디렉토리 사용이므로 문제없음)
+
+**다음:** Phase 2 시작 — P2-01 (웹 UI) 또는 P2-03 (YouTube 자막 인제스터) 선택
+
+---
+
+## HO-018 | 2026-04-05 | W4-02
+
+**완료:** Obsidian 연동 설정 + 검증
+- `wiki/.obsidian/app.json` — 위키링크 모드, 첨부파일 경로 `../raw/images`
+- `wiki/.obsidian/graph.json` — `chunks/` 필터, 폴더별 색상 구분
+- `wiki/concepts/LLM_지식베이스_시스템.md` — 데모 개념 파일 (시스템 자체 설명)
+- `wiki/OBSIDIAN_SETUP.md` — vault 열기 가이드
+- `scripts/verify_obsidian.py` — 연동 호환성 자동 검증 도구
+
+**결정사항:**
+- vault 루트: `wiki/` 폴더 (프로젝트 루트가 아님)
+- `chunks/` 는 graph.json `search: "-path:chunks/"` 필터로 그래프 뷰에서 제외 (중간 파일 노이즈 차단)
+- 그래프 색상: concepts=파랑, explorations=초록, conflicts=빨강, 관리파일=노랑
+- 이미지: `attachmentFolderPath: "../raw/images"` → vault 외부 raw/images/ 자동 연결
+- `[[링크]]` 형식이 Obsidian wikilink와 완전 동일 → 백링크 패널·그래프 뷰 즉시 동작
+- `verify_obsidian.py` 검증 결과: ERR 0건, WARN 0건, INFO 4건 (미래 stub 링크 — 정상)
+
+**주의:**
+- `_summaries.md` 주석의 `` `[[개념명]]` `` 가 verify_obsidian에서 INFO로 잡힘 (코드 스팬 내부 — 무시해도 됨)
+- Obsidian 첫 실행 시 vault 신뢰 확인 팝업이 뜸 (`.obsidian/` 존재해도 보안 정책상 표시)
+- `.obsidian/workspace.json` 은 Obsidian이 자동 생성 — 커밋에서 제외 권장 (`.gitignore`에 추가 가능)
+
+**다음:** W4-03 (MVP 통합 테스트)
+
+---
+
+## HO-017 | 2026-04-05 | W4-01
+
+**완료:** CLI 인터페이스 구현
+- `scripts/cli.py` — typer + rich 기반 전체 CLI
+
+**결정사항:**
+- 4개 주 명령어: `ingest`, `compile`, `query`, `status`
+- 보너스 명령어 `watch` 추가 (incremental.py의 watch() 래핑)
+- `ingest`: URL → `ingest_web`, .pdf → `ingest_pdf`, .xlsx/.xls/.xlsm → `ingest_excel`, .pptx → `ingest_ppt`, .docx → `ingest_word`, .md/.txt → 직접 복사
+- `compile` 옵션: `--all`(전체), `--changed`(기본), `--file`(개별), `--dry-run`, `--no-index`, `--workers`
+  - `--all` 실행 시 인덱스 갱신은 마지막 파일에서만 1회 수행 (비용 절감)
+- `query` 옵션: `--save`(explorations 저장), `--verbose`(컨텍스트 통계/파일 목록)
+- `status`: raw 건수(하위 디렉토리별), wiki 개념/탐색/충돌 건수, stub 수, gaps 수, 마지막 컴파일 시각 (hash_store mtime 기반)
+- 모든 LLM 호출 구간에 rich SpinnerColumn 표시 (transient — 완료 후 사라짐)
+- `_load_settings_safe()`: settings.yaml 미존재 시 명확한 오류 메시지 + Exit(1)
+
+**주의:**
+- `kb compile` 옵션 없이 실행하면 `--changed` 와 동일 (가장 안전한 기본값)
+- `kb watch` 는 watchdog 미설치 시 ImportError → 명확한 오류 메시지 출력 후 종료
+- `_compile_all` 은 `.md` 파일만 대상 (인제스터가 이미 .md로 변환한 파일 처리)
+- `kb status` 의 gaps 수는 `gaps.md`의 `- ` 시작 줄 카운트 기반 (근사값)
+
+**다음:** W4-02 (Obsidian 연동 확인)
+
+---
+
+## HO-011 | 2026-04-05 | W2-02
+
+**완료:** 청크 Map-Reduce 컴파일러 구현
+- `scripts/compile.py` — `compile_document()` 전략 자동 라우팅 + Map-Reduce/Hierarchical 내부 함수 추가
+
+**결정사항:**
+- 별도 파일 대신 `compile.py`에 통합 — 공유 유틸(`_call_llm`, `_render`, `_strip_fence` 등) 재사용
+- 병렬 처리: `ThreadPoolExecutor` (I/O bound LLM 호출에 적합), `max_workers=4` 기본값
+- `compile_document()` / `compile_text()` 가 전략을 자동 선택 — 호출자는 전략을 신경 쓸 필요 없음
+- Hierarchical: L2 청크 → 그룹별 병렬 요약(L1) → 최종 통합 (2단계 Map-Reduce)
+  - L1 통합 시 `wiki_index` 대신 `"(그룹 N/M 중간 요약)"` 문자열 전달 — 불필요한 인덱스 컨텍스트 제거
+- 반환값에 `chunk_count` 추가 (single_pass: 1, 나머지: 실제 청크 수)
+
+**주의:**
+- `compile_chunk_summary` 프롬프트의 `system` 필드는 비어 있음 — `_render(tmpl["system"], {})` 호출 시 빈 문자열 전달됨. Claude API는 빈 system 허용
+- `chunk.section` 을 `chunk_range` 변수로 전달 — 섹션명이 청크 범위 역할
+- `_compile_hierarchical_chunks()`의 그룹 번호는 0-based (`chunk.group`) — 로그 출력 시 `g_num + 1`로 1-based 변환
+
+**다음:** W2-03 (인덱스 자동 갱신)
+
+---
+
+## HO-007 | 2026-04-05 | W1-03
+
+**완료:** Excel 인제스터 구현
+- `scripts/ingest_excel.py` — .xlsx/.xls/.xlsm → 마크다운 테이블 변환 + raw/office/ 저장
+
+**결정사항:**
+- openpyxl 두 번 로드: `data_only=False`(수식 문자열) + `data_only=True`(캐시 계산값) 조합
+  - 수식셀: `계산값 [formula: =수식]` 형식으로 병기
+  - `data_only=True` 값은 마지막 저장 시 캐시된 값이므로 실시간 계산이 아님 (openpyxl 한계)
+- 청킹: 1000행 단위 시트 내 분할, 각 청크에 컬럼 헤더 반복 (`settings.yaml`의 `excel_rows_per_chunk` 참조)
+- 차트: xlsx 차트는 렌더링 이미지 없음 → 차트 타입/제목/시리즈 메타데이터 텍스트 설명으로 대체
+  - `read_only=False`로 별도 로드하여 `ws._charts` 접근 (read_only 모드에서는 _charts 미지원)
+- `.meta.yaml`: 시트별 행수/열수/차트수 포함
+
+**주의:**
+- `read_only=True`로 열면 `ws._charts` 접근 불가 → 차트 추출 시 `read_only=False` 재로드 필요
+- 대용량 파일에서 `read_only=False` 재로드는 메모리 이슈 가능 → 향후 최적화 대상
+- `.xls` 포맷은 openpyxl이 지원하지 않을 수 있음 (xlrd 필요) → 현재는 에러 반환
+
+**다음:** W1-04 (PowerPoint 인제스터)
+
+---
+
+## HO-002 | 2026-04-05 | INFRA-01
+
+**완료:** 프로젝트 디렉토리 구조 + 설정 파일 초안 생성
+- `raw/articles/`, `raw/papers/`, `raw/repos/`, `raw/office/`, `raw/images/`
+- `wiki/concepts/`, `wiki/explorations/`, `wiki/chunks/`
+- `wiki/_index.md`, `wiki/_summaries.md`, `wiki/gaps.md`
+- `config/settings.yaml` — 모델 프로필 + 청킹 임계값 + 경로 설정
+- `config/prompts.yaml` — 컴파일/쿼리/인제스트 프롬프트 템플릿 전체
+- `pyproject.toml` — uv 기반 의존성 선언
+
+**결정사항:**
+- `context_limit`은 입력 한도 기준 (기획서 주의사항 반영)
+- 청킹 임계값 80%/300%를 `single_pass_threshold`/`map_reduce_threshold`로 명명
+- `prompts.yaml`에 compile, query, vision, exploration 전체 프롬프트 포함
+- `wiki/chunks/` 추가 — Map-Reduce 청크 요약 저장용 (기획서 3.2-B)
+
+**주의:**
+- `scripts/cli.py` 아직 없음 → `kb` CLI 동작 안 함 (W4-01에서 구현)
+- `prompts.yaml`의 `{{ variable }}`은 Python에서 str.format_map() 또는 jinja2로 치환
+- `pyproject.toml` entry point: `scripts.cli:app`
+
+**다음:** INFRA-02 (토큰 카운터 유틸리티)
+
+---
