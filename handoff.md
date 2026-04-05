@@ -467,3 +467,32 @@
 **다음:** INFRA-02 (토큰 카운터 유틸리티)
 
 ---
+
+---
+
+## HO-008 | 2026-04-05 | P2-01
+
+**완료:** 웹 UI 구현 — `web/` 디렉토리 (Next.js 16.2.2 + Tailwind CSS)
+- `web/lib/wiki.ts` — wiki 파일 읽기 유틸 (concepts, explorations, root 파일)
+- `web/app/page.tsx` — 홈 (_summaries.md + 개념 목록)
+- `web/app/concepts/page.tsx` — 개념 목록 페이지
+- `web/app/concepts/[slug]/page.tsx` — 개념 상세 (마크다운 렌더링, [[위키링크]] → Next.js Link 변환)
+- `web/app/explorations/page.tsx` + `[slug]/page.tsx` — 탐색 기록
+- `web/app/gaps/page.tsx` — 갭 목록
+- `web/app/search/page.tsx` — 클라이언트 사이드 검색 UI
+- `web/app/api/search/route.ts` — Fuse.js 기반 검색 API
+- `web/components/MarkdownRenderer.tsx` — react-markdown + remark-gfm, Obsidian [[링크]] 자동 변환
+
+**결정사항:**
+- `react-markdown` 채택 (next-mdx-remote 대신) — wiki 파일이 .mdx가 아닌 순수 .md이므로 충분
+- Fuse.js 퍼지 검색: title(가중치 2) + content(가중치 1), threshold 0.4
+- `WIKI_DIR` 환경변수로 wiki 경로 오버라이드 가능 (기본값: `../wiki`)
+- 빌드: `pnpm build` 성공, 정적 생성(SSG) + 검색 API는 서버사이드(Dynamic)
+- 개발 서버: `WIKI_DIR=../wiki pnpm dev --port 3000`
+
+**주의:**
+- `web/` 안에서 `pnpm install` 필요 (루트 pyproject.toml과 별개 프로젝트)
+- Turbopack 경고 있음 (lib/wiki.ts의 `path.join`/`fs` 사용) — 빌드는 정상 완료
+- `rehype-highlight` 설치했으나 현재 코드 하이라이팅 미적용 — 필요 시 MarkdownRenderer에 추가
+
+**다음:** P2-02 (개념 그래프 뷰, D3.js) 또는 P2-03 (YouTube 자막 인제스터)
