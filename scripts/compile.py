@@ -21,18 +21,17 @@ CLI:
 """
 
 import logging
-import os
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timezone
+from datetime import date
 from pathlib import Path
 
-import anthropic
 import yaml
 
 from scripts.chunking import Chunk, chunk_document
 from scripts.index_updater import update_all as _update_index_all
+from scripts.llm import call_llm as _call_llm
 from scripts.token_counter import (
     estimate_tokens,
     get_available_tokens,
@@ -65,63 +64,6 @@ def _render(template: str, variables: dict) -> str:
         return str(variables.get(key, m.group(0)))
 
     return re.sub(r"\{\{\s*(\w+)\s*\}\}", replace, template)
-
-
-# ──────────────────────────────────────────────
-# LLM 호출
-# ──────────────────────────────────────────────
-
-def _call_llm(
-    system_prompt: str,
-    user_prompt: str,
-    settings: dict,
-    cache: "CacheStore | None" = None,
-) -> str:
-    """Claude API를 호출하고 텍스트 응답을 반환합니다.
-
-    캐시가 주어지면 동일 입력에 대해 저장된 응답을 반환합니다 (API 미호출).
-
-    Args:
-        system_prompt: 시스템 프롬프트
-        user_prompt: 유저 프롬프트
-        settings: load_settings() 결과
-        cache: CacheStore 인스턴스 (None 이면 캐싱 비활성화)
-
-    Returns:
-        LLM 응답 텍스트
-    """
-    from scripts.cache import CacheStore  # 순환 참조 방지
-
-    llm_cfg = settings["llm"]
-    model = llm_cfg["model"]
-
-    # ── 캐시 조회 ──
-    if cache is not None:
-        cached = cache.get(model, system_prompt, user_prompt)
-        if cached is not None:
-            return cached
-
-    api_key = os.environ.get(llm_cfg.get("api_key_env", "ANTHROPIC_API_KEY"))
-    if not api_key:
-        raise EnvironmentError(
-            f"API 키 환경변수 '{llm_cfg.get('api_key_env', 'ANTHROPIC_API_KEY')}'가 설정되지 않았습니다."
-        )
-
-    client = anthropic.Anthropic(api_key=api_key)
-    response = client.messages.create(
-        model=model,
-        max_tokens=llm_cfg["output_reserved"],
-        temperature=llm_cfg.get("temperature", 0.3),
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_prompt}],
-    )
-    result = response.content[0].text
-
-    # ── 캐시 저장 ──
-    if cache is not None:
-        cache.put(model, system_prompt, user_prompt, result)
-
-    return result
 
 
 # ──────────────────────────────────────────────

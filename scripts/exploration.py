@@ -24,16 +24,15 @@ CLI:
 
 import json
 import logging
-import os
 import re
 import sys
 from datetime import date
 from pathlib import Path
 from typing import Optional
 
-import anthropic
 import yaml
 
+from scripts.llm import call_llm as _call_llm
 from scripts.token_counter import load_settings
 
 logger = logging.getLogger(__name__)
@@ -61,22 +60,6 @@ def _render(template: str, variables: dict) -> str:
     return re.sub(r"\{\{\s*(\w+)\s*\}\}", replace, template)
 
 
-def _call_llm(system_prompt: str, user_prompt: str, settings: dict) -> str:
-    """Claude API 호출."""
-    api_key_env = settings["llm"].get("api_key_env", "ANTHROPIC_API_KEY")
-    api_key = os.environ.get(api_key_env)
-    if not api_key:
-        raise RuntimeError(f"환경변수 {api_key_env}가 설정되지 않았습니다.")
-
-    client = anthropic.Anthropic(api_key=api_key)
-    msg = client.messages.create(
-        model=settings["llm"]["model"],
-        max_tokens=settings["llm"]["output_reserved"],
-        temperature=settings["llm"].get("temperature", 0.3),
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_prompt}],
-    )
-    return msg.content[0].text
 
 
 def _slugify_question(question: str, max_len: int = 40) -> str:

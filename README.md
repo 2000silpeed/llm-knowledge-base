@@ -223,10 +223,12 @@ kb team status
 
 ```yaml
 llm:
-  model: claude-sonnet-4-6       # 모델 변경 시 이 줄만 수정
+  provider: anthropic            # anthropic | ollama
+  model: claude-sonnet-4-6
   context_limit: 200000
   output_reserved: 8000
   temperature: 0.3
+  api_key_env: ANTHROPIC_API_KEY
 
 cache:
   enabled: true                  # LLM 응답 캐싱
@@ -242,7 +244,31 @@ paths:
   wiki: wiki
 ```
 
-모델 변경은 `llm.model` 한 줄만 바꾸면 전체 파이프라인이 자동 적응합니다.
+`llm.provider` + `llm.model` 두 줄만 바꾸면 전체 파이프라인이 다른 모델로 전환됩니다.
+
+### Ollama 로컬 모델로 전환
+
+```bash
+# 1. Ollama 설치 후 모델 다운로드
+ollama pull gemma3:4b
+
+# 2. settings.yaml 수정
+# llm:
+#   provider: ollama
+#   model: gemma3:4b
+#   base_url: http://localhost:11434
+#   context_limit: 128000
+#   output_reserved: 4000
+#   temperature: 0.3
+
+# 3. 서버 실행
+ollama serve
+
+# 4. 동일하게 사용
+uv run kb compile --changed
+```
+
+지원 모델: `gemma3:4b`, `gemma3:27b`, `llama3.2:3b`, `mistral`, `qwen2.5` 등 Ollama에서 지원하는 모든 모델.
 
 ---
 

@@ -184,17 +184,9 @@ def _extract_page_images(
 # ──────────────────────────────────────────────
 
 def _generate_caption(image_path: Path, settings: dict) -> str:
-    """Claude Vision API로 이미지 캡션을 한 문장 생성합니다."""
+    """Vision API로 이미지 캡션을 한 문장 생성합니다."""
     try:
-        import anthropic
-        import base64
-
-        key_env = settings.get("llm", {}).get("api_key_env", "ANTHROPIC_API_KEY")
-        api_key = os.environ.get(key_env)
-        client = anthropic.Anthropic(api_key=api_key)
-
-        img_bytes = image_path.read_bytes()
-        b64 = base64.standard_b64encode(img_bytes).decode()
+        from scripts.llm import call_vision
 
         ext = image_path.suffix.lower().lstrip(".")
         media_map = {
@@ -202,29 +194,11 @@ def _generate_caption(image_path: Path, settings: dict) -> str:
             "png": "image/png", "gif": "image/gif", "webp": "image/webp",
         }
         media_type = media_map.get(ext, "image/png")
-
-        model = settings.get("llm", {}).get("model", "claude-sonnet-4-6")
-        response = client.messages.create(
-            model=model,
-            max_tokens=200,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {"type": "base64", "media_type": media_type, "data": b64},
-                    },
-                    {
-                        "type": "text",
-                        "text": (
-                            "이 이미지를 한 문장으로 간결하게 설명해주세요. "
-                            "그래프·표·다이어그램의 경우 핵심 내용(수치, 축 레이블, 결론)을 포함하세요."
-                        ),
-                    },
-                ],
-            }],
+        prompt = (
+            "이 이미지를 한 문장으로 간결하게 설명해주세요. "
+            "그래프·표·다이어그램의 경우 핵심 내용(수치, 축 레이블, 결론)을 포함하세요."
         )
-        return response.content[0].text.strip()
+        return call_vision(image_path.read_bytes(), media_type, prompt, settings).strip()
     except Exception as exc:
         logger.warning("Vision 캡션 생성 실패 (%s): %s", image_path.name, exc)
         return ""

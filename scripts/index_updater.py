@@ -20,14 +20,13 @@ compile.py 에서 compile_document() / compile_text() 완료 후 자동 호출�
 """
 
 import logging
-import os
 import re
 from datetime import date
 from pathlib import Path
 
-import anthropic
 import yaml
 
+from scripts.llm import call_llm as _call_llm
 from scripts.token_counter import load_settings
 
 logger = logging.getLogger(__name__)
@@ -53,25 +52,6 @@ def _render(template: str, variables: dict) -> str:
         key = m.group(1).strip()
         return str(variables.get(key, m.group(0)))
     return re.sub(r"\{\{\s*(\w+)\s*\}\}", replace, template)
-
-
-def _call_llm(system_prompt: str, user_prompt: str, settings: dict) -> str:
-    """Claude API 호출."""
-    llm_cfg = settings["llm"]
-    api_key = os.environ.get(llm_cfg.get("api_key_env", "ANTHROPIC_API_KEY"))
-    if not api_key:
-        raise EnvironmentError(
-            f"API 키 환경변수 '{llm_cfg.get('api_key_env', 'ANTHROPIC_API_KEY')}'가 설정되지 않았습니다."
-        )
-    client = anthropic.Anthropic(api_key=api_key)
-    response = client.messages.create(
-        model=llm_cfg["model"],
-        max_tokens=llm_cfg["output_reserved"],
-        temperature=llm_cfg.get("temperature", 0.3),
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_prompt}],
-    )
-    return response.content[0].text
 
 
 def _strip_fence(text: str) -> str:

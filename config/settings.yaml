@@ -2,6 +2,7 @@
 # ⚠️  모델을 바꿀 때는 llm 섹션만 수정하면 전체 파이프라인이 자동 적응됩니다.
 
 llm:
+  provider: anthropic        # anthropic | ollama
   model: claude-sonnet-4-6
   context_limit: 200000     # 실제 모델 입력 한도 (토큰)
   output_reserved: 8000     # LLM 출력용 예약 토큰
@@ -10,15 +11,26 @@ llm:
   temperature: 0.3          # 위키 생성은 일관성 우선 → 낮게 설정
   api_key_env: ANTHROPIC_API_KEY
 
-# 소형 모델 예시 (아래 주석 해제 후 위 llm 블록과 교체)
+# ── Anthropic 소형 모델 (아래 주석 해제 후 위 llm 블록과 교체) ──
 # llm:
+#   provider: anthropic
 #   model: claude-haiku-4-5-20251001
 #   context_limit: 48000
 #   output_reserved: 4000
 #   prompt_reserved: 2000
-#   # → 가용 컨텐츠 토큰: 42,000
 #   temperature: 0.3
 #   api_key_env: ANTHROPIC_API_KEY
+
+# ── Ollama 로컬 모델 ──
+# 사전 준비: ollama serve  &&  ollama pull gemma3:4b
+# llm:
+#   provider: ollama
+#   model: gemma3:4b          # gemma3:4b | gemma3:27b | llama3.2:3b | mistral 등
+#   base_url: http://localhost:11434
+#   context_limit: 128000
+#   output_reserved: 4000
+#   prompt_reserved: 2000
+#   temperature: 0.3
 
 chunking:
   # 청킹 전략 임계값 (가용 토큰 대비 비율)

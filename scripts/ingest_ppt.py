@@ -45,44 +45,21 @@ def _slugify(text: str, max_len: int = 60) -> str:
 # ──────────────────────────────────────────────
 
 def _generate_caption(image_bytes: bytes, ext: str, settings: dict) -> str:
-    """Claude Vision API로 슬라이드 이미지 캡션을 한 문장 생성합니다."""
+    """Vision API로 슬라이드 이미지 캡션을 한 문장 생성합니다."""
     try:
-        import anthropic
+        from scripts.llm import call_vision
 
-        key_env = settings.get("llm", {}).get("api_key_env", "ANTHROPIC_API_KEY")
-        api_key = os.environ.get(key_env)
-        client = anthropic.Anthropic(api_key=api_key)
-
-        b64 = base64.standard_b64encode(image_bytes).decode()
         media_map = {
             "jpg": "image/jpeg", "jpeg": "image/jpeg",
             "png": "image/png", "gif": "image/gif", "webp": "image/webp",
-            "bmp": "image/png",  # bmp → png로 처리
+            "bmp": "image/png",
         }
         media_type = media_map.get(ext.lower(), "image/png")
-        model = settings.get("llm", {}).get("model", "claude-sonnet-4-6")
-
-        response = client.messages.create(
-            model=model,
-            max_tokens=200,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {"type": "base64", "media_type": media_type, "data": b64},
-                    },
-                    {
-                        "type": "text",
-                        "text": (
-                            "이 프레젠테이션 슬라이드를 한 문장으로 간결하게 설명해주세요. "
-                            "차트·그래프·표가 있으면 핵심 수치와 결론을 포함하세요."
-                        ),
-                    },
-                ],
-            }],
+        prompt = (
+            "이 프레젠테이션 슬라이드를 한 문장으로 간결하게 설명해주세요. "
+            "차트·그래프·표가 있으면 핵심 수치와 결론을 포함하세요."
         )
-        return response.content[0].text.strip()
+        return call_vision(image_bytes, media_type, prompt, settings).strip()
     except Exception as exc:
         logger.warning("Vision 캡션 생성 실패: %s", exc)
         return ""
