@@ -270,6 +270,26 @@ uv run kb compile --changed
 
 지원 모델: `gemma3:4b`, `gemma3:27b`, `llama3.2:3b`, `mistral`, `qwen2.5` 등 Ollama에서 지원하는 모든 모델.
 
+### Z.ai (GLM) 또는 기타 OpenAI 호환 API
+
+```bash
+# API 키 설정
+export Z_AI_API_KEY="your-key"
+
+# settings.yaml 수정
+# llm:
+#   provider: openai
+#   model: glm-4.5-air
+#   base_url: https://chat.z.ai/api
+#   api_key_env: Z_AI_API_KEY
+#   context_limit: 128000
+#   output_reserved: 4000
+#   temperature: 0.3
+```
+
+`provider: openai`는 `/v1/chat/completions` 엔드포인트를 제공하는 모든 서비스에서 동작합니다.
+(Groq, Together AI, 01.AI, Fireworks 등)
+
 ---
 
 ## 웹 UI

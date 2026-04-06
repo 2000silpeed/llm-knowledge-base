@@ -64,8 +64,12 @@ def call_llm(
 ) -> str:
     """통합 LLM 호출.
 
-    settings["llm"]["provider"] 값에 따라 Anthropic 또는 Ollama 중 하나를 호출합니다.
-    cache 가 주어지면 동일 입력에 대해 저장된 응답을 반환합니다 (API 미호출).
+    settings["llm"]["provider"] 값에 따라 백엔드를 선택합니다.
+
+    지원 provider:
+      anthropic — Claude API
+      ollama    — 로컬 Ollama (vision은 네이티브 /api/generate 사용)
+      openai    — OpenAI 호환 API (Z.ai, Groq, Together AI, 01.AI 등)
 
     Args:
         system_prompt: 시스템 프롬프트 텍스트
@@ -78,8 +82,8 @@ def call_llm(
 
     Raises:
         ValueError:       지원하지 않는 provider
-        EnvironmentError: API 키 미설정 (Anthropic)
-        RuntimeError:     Ollama 서버 연결 실패
+        EnvironmentError: API 키 미설정
+        RuntimeError:     서버 연결 실패
     """
     llm_cfg = settings["llm"]
     model = llm_cfg["model"]
@@ -97,10 +101,12 @@ def call_llm(
         result = _call_anthropic(system_prompt, user_prompt, llm_cfg)
     elif provider == "ollama":
         result = _call_ollama(system_prompt, user_prompt, llm_cfg)
+    elif provider == "openai":
+        result = _call_openai_compatible(system_prompt, user_prompt, llm_cfg)
     else:
         raise ValueError(
             f"지원하지 않는 provider: '{provider}'. "
-            f"settings.yaml 의 llm.provider 를 'anthropic' 또는 'ollama' 로 설정하세요."
+            f"settings.yaml 의 llm.provider 를 'anthropic', 'ollama', 'openai' 중 하나로 설정하세요."
         )
 
     # ── 캐시 저장 ──
@@ -186,6 +192,71 @@ def _call_ollama(system_prompt: str, user_prompt: str, llm_cfg: dict) -> str:
 
 
 # ──────────────────────────────────────────────
+# OpenAI 호환 (Z.ai, Groq, Together AI, 01.AI 등)
+# ──────────────────────────────────────────────
+
+def _call_openai_compatible(system_prompt: str, user_prompt: str, llm_cfg: dict) -> str:
+    """OpenAI 호환 API 호출.
+
+    Z.ai, Groq, Together AI, 01.AI, Fireworks 등 /v1/chat/completions 를 제공하는
+    모든 서비스에서 동작합니다.
+
+    settings.yaml 필수 필드:
+      base_url:    API 기본 URL (예: https://chat.z.ai/api)
+      api_key_env: API 키 환경변수명 (예: Z_AI_API_KEY)
+      model:       모델명 (예: glm-4.5-air)
+    """
+    import requests
+
+    base_url = llm_cfg.get("base_url", "")
+    if not base_url:
+        raise ValueError(
+            "openai provider 사용 시 settings.yaml 에 llm.base_url 을 설정해야 합니다.\n"
+            "예) base_url: https://chat.z.ai/api"
+        )
+
+    api_key_env = llm_cfg.get("api_key_env", "OPENAI_API_KEY")
+    api_key = os.environ.get(api_key_env)
+    if not api_key:
+        raise EnvironmentError(
+            f"API 키 환경변수 '{api_key_env}'가 설정되지 않았습니다.\n"
+            f"export {api_key_env}='your-key' 를 실행하세요."
+        )
+
+    url = f"{base_url.rstrip('/')}/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": llm_cfg["model"],
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": llm_cfg.get("temperature", 0.3),
+        "stream": False,
+    }
+    if "output_reserved" in llm_cfg:
+        payload["max_tokens"] = llm_cfg["output_reserved"]
+
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=300)
+        resp.raise_for_status()
+    except requests.exceptions.ConnectionError:
+        raise RuntimeError(f"API 서버에 연결할 수 없습니다: {base_url}")
+    except requests.exceptions.HTTPError as e:
+        body = ""
+        try:
+            body = resp.json().get("error", {}).get("message", resp.text)
+        except Exception:
+            body = resp.text
+        raise RuntimeError(f"API 오류 ({resp.status_code}): {body}") from e
+
+    return resp.json()["choices"][0]["message"]["content"]
+
+
+# ──────────────────────────────────────────────
 # Vision (이미지 → 텍스트 캡션)
 # ──────────────────────────────────────────────
 
@@ -220,6 +291,8 @@ def call_vision(
         return _vision_anthropic(b64, media_type, prompt, llm_cfg)
     elif provider == "ollama":
         return _vision_ollama(b64, media_type, prompt, llm_cfg)
+    elif provider == "openai":
+        return _vision_openai_compatible(b64, media_type, prompt, llm_cfg)
     else:
         raise ValueError(f"지원하지 않는 provider: '{provider}'")
 
@@ -268,3 +341,38 @@ def _vision_ollama(b64: str, media_type: str, prompt: str, llm_cfg: dict) -> str
     except Exception as e:
         logger.warning("Ollama vision 호출 실패 (%s) — 캡션 생략: %s", llm_cfg["model"], e)
         return f"(이미지 캡션 생략 — Ollama vision 오류: {e})"
+
+
+def _vision_openai_compatible(b64: str, media_type: str, prompt: str, llm_cfg: dict) -> str:
+    """OpenAI 호환 vision 호출 (base64 이미지 URL 방식)."""
+    import requests
+
+    base_url = llm_cfg.get("base_url", "")
+    if not base_url:
+        return "(이미지 캡션 생략 — base_url 미설정)"
+
+    api_key_env = llm_cfg.get("api_key_env", "OPENAI_API_KEY")
+    api_key = os.environ.get(api_key_env, "")
+
+    url = f"{base_url.rstrip('/')}/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    payload = {
+        "model": llm_cfg["model"],
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{b64}"}},
+                {"type": "text", "text": prompt},
+            ],
+        }],
+        "max_tokens": 512,
+        "stream": False,
+    }
+
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=120)
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        logger.warning("OpenAI 호환 vision 호출 실패 (%s) — 캡션 생략: %s", llm_cfg["model"], e)
+        return f"(이미지 캡션 생략 — vision 오류: {e})"

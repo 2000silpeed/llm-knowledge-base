@@ -32,6 +32,28 @@ llm:
 #   prompt_reserved: 2000
 #   temperature: 0.3
 
+# ── Z.ai (GLM 모델) ──
+# 사전 준비: export Z_AI_API_KEY='your-key'
+# llm:
+#   provider: openai           # OpenAI 호환 엔드포인트 사용
+#   model: glm-4.5-air         # glm-4.5-air | glm-4.5 | glm-z1-air 등
+#   base_url: https://chat.z.ai/api
+#   api_key_env: Z_AI_API_KEY
+#   context_limit: 128000
+#   output_reserved: 4000
+#   prompt_reserved: 2000
+#   temperature: 0.3
+
+# ── 기타 OpenAI 호환 서비스 (Groq, Together AI, 01.AI 등) ──
+# llm:
+#   provider: openai
+#   model: <모델명>
+#   base_url: <서비스 API URL>
+#   api_key_env: <API 키 환경변수명>
+#   context_limit: 131072
+#   output_reserved: 4000
+#   temperature: 0.3
+
 chunking:
   # 청킹 전략 임계값 (가용 토큰 대비 비율)
   single_pass_threshold: 0.80    # ≤ 80%  → 단일 패스 (그대로 전달)
