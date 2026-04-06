@@ -1,0 +1,35 @@
+# kb-watch.service — raw/ 자동 감시 + 증분 컴파일 서비스
+#
+# raw/ 에 파일이 추가되면 자동으로 wiki/ 를 업데이트합니다.
+#
+# 설치 방법:
+#   1. User, WorkingDirectory 를 실제 값으로 수정
+#   2. sudo cp systemd/kb-watch.service /etc/systemd/system/
+#   3. sudo systemctl daemon-reload
+#   4. sudo systemctl enable kb-watch
+#   5. sudo systemctl start kb-watch
+#
+# 로그 확인: journalctl -u kb-watch -f
+
+[Unit]
+Description=LLM Knowledge Base — File Watcher (auto compile)
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USERNAME
+WorkingDirectory=/path/to/llm-knowledge-base
+
+EnvironmentFile=/path/to/llm-knowledge-base/.env
+
+ExecStart=/path/to/llm-knowledge-base/.venv/bin/kb watch --workers 4
+
+Restart=on-failure
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kb-watch
+
+[Install]
+WantedBy=multi-user.target

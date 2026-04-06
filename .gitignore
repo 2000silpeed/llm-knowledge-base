@@ -9,7 +9,8 @@ build/
 
 # 환경 / API 키
 .env
-.env.*
+.env.local
+.env.*.local
 *.key
 
 # 런타임 생성 파일
@@ -43,6 +44,13 @@ raw/images/
 
 # wiki chunks — 중간 파일
 wiki/chunks/
+
+# start.sh 런타임 파일
+.pids/
+.logs/
+
+# 환경변수 (민감 정보)
+.env
 
 # IDE
 .vscode/

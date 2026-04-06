@@ -53,21 +53,25 @@ wiki/        ← LLM이 생성·유지 (사람 직접 편집 최소화)
 - [uv](https://github.com/astral-sh/uv) 패키지 관리자
 - Anthropic API 키
 
-### 설치
+### 설치 및 실행
 
 ```bash
 git clone https://github.com/2000silpeed/llm-knowledge-base.git
 cd llm-knowledge-base
 
-# 의존성 설치
-uv sync
+# 환경변수 설정
+cp .env.example .env
+# .env 에 ANTHROPIC_API_KEY 입력
 
-# API 키 설정
-export ANTHROPIC_API_KEY="sk-ant-..."
+# 웹 UI + CLI 환경 한 번에 시작
+./start.sh
 
-# CLI 확인
-uv run kb --help
+# 또는 Makefile 사용
+make install   # 최초 1회
+make start
 ```
+
+> 상세 배포 방법 (서버 상주, Vercel, Railway): [DEPLOY.md](./DEPLOY.md)
 
 ### 첫 번째 자료 인제스트
 

@@ -1,0 +1,43 @@
+# kb-web.service — 웹 UI systemd 서비스
+#
+# 설치 방법:
+#   1. 아래 User, WorkingDirectory, ExecStart 경로를 실제 값으로 수정
+#   2. sudo cp systemd/kb-web.service /etc/systemd/system/
+#   3. sudo systemctl daemon-reload
+#   4. sudo systemctl enable kb-web   # 부팅 시 자동 시작
+#   5. sudo systemctl start kb-web
+#
+# 상태 확인: sudo systemctl status kb-web
+# 로그 확인: journalctl -u kb-web -f
+
+[Unit]
+Description=LLM Knowledge Base — Web UI
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USERNAME
+WorkingDirectory=/path/to/llm-knowledge-base/web
+
+# 환경변수 파일 (프로젝트 루트의 .env)
+EnvironmentFile=/path/to/llm-knowledge-base/.env
+
+Environment=NODE_ENV=production
+Environment=PORT=3000
+
+# 빌드된 Next.js 실행 (배포 시)
+# 사전에 cd web && pnpm build 를 실행해야 합니다.
+ExecStart=/usr/bin/pnpm start
+
+# 개발 서버로 실행하려면 아래로 교체:
+# ExecStart=/usr/bin/pnpm dev
+
+Restart=on-failure
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kb-web
+
+[Install]
+WantedBy=multi-user.target
