@@ -1,5 +1,6 @@
 import { getExploration, getAllExplorations } from "@/lib/wiki";
 import MarkdownRenderer from "@/components/MarkdownRenderer";
+import ShareButton from "@/components/ShareButton";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -25,10 +26,11 @@ export default async function ExplorationPage({ params }: Props) {
 
   return (
     <article>
-      <div className="mb-6">
+      <div className="mb-6 flex items-center justify-between">
         <Link href="/explorations" className="text-sm text-gray-400 hover:text-blue-600">
           ← 탐색 기록
         </Link>
+        <ShareButton type="explorations" slug={decodedSlug} />
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 p-8">

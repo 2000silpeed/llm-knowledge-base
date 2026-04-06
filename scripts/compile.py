@@ -71,18 +71,36 @@ def _render(template: str, variables: dict) -> str:
 # LLM 호출
 # ──────────────────────────────────────────────
 
-def _call_llm(system_prompt: str, user_prompt: str, settings: dict) -> str:
+def _call_llm(
+    system_prompt: str,
+    user_prompt: str,
+    settings: dict,
+    cache: "CacheStore | None" = None,
+) -> str:
     """Claude API를 호출하고 텍스트 응답을 반환합니다.
+
+    캐시가 주어지면 동일 입력에 대해 저장된 응답을 반환합니다 (API 미호출).
 
     Args:
         system_prompt: 시스템 프롬프트
         user_prompt: 유저 프롬프트
         settings: load_settings() 결과
+        cache: CacheStore 인스턴스 (None 이면 캐싱 비활성화)
 
     Returns:
         LLM 응답 텍스트
     """
+    from scripts.cache import CacheStore  # 순환 참조 방지
+
     llm_cfg = settings["llm"]
+    model = llm_cfg["model"]
+
+    # ── 캐시 조회 ──
+    if cache is not None:
+        cached = cache.get(model, system_prompt, user_prompt)
+        if cached is not None:
+            return cached
+
     api_key = os.environ.get(llm_cfg.get("api_key_env", "ANTHROPIC_API_KEY"))
     if not api_key:
         raise EnvironmentError(
@@ -91,13 +109,19 @@ def _call_llm(system_prompt: str, user_prompt: str, settings: dict) -> str:
 
     client = anthropic.Anthropic(api_key=api_key)
     response = client.messages.create(
-        model=llm_cfg["model"],
+        model=model,
         max_tokens=llm_cfg["output_reserved"],
         temperature=llm_cfg.get("temperature", 0.3),
         system=system_prompt,
         messages=[{"role": "user", "content": user_prompt}],
     )
-    return response.content[0].text
+    result = response.content[0].text
+
+    # ── 캐시 저장 ──
+    if cache is not None:
+        cache.put(model, system_prompt, user_prompt, result)
+
+    return result
 
 
 # ──────────────────────────────────────────────
@@ -214,6 +238,7 @@ def _compile_single_chunk(
     source_file: str,
     prompts: dict,
     settings: dict,
+    cache=None,
 ) -> tuple[int, str]:
     """청크 하나에 대한 부분 요약을 생성합니다.
 
@@ -229,7 +254,7 @@ def _compile_single_chunk(
         "chunk_range": chunk.section,
         "chunk_content": chunk.content,
     })
-    summary = _call_llm(system_prompt, user_prompt, settings)
+    summary = _call_llm(system_prompt, user_prompt, settings, cache=cache)
     logger.info("  청크 %d/%d 요약 완료", chunk.index, chunk.total)
     return chunk.index, summary
 
@@ -240,6 +265,7 @@ def _merge_chunk_summaries(
     wiki_index: str,
     prompts: dict,
     settings: dict,
+    cache=None,
 ) -> str:
     """청크 부분 요약들을 통합하여 최종 wiki 항목을 생성합니다."""
     formatted = "\n\n---\n\n".join(
@@ -254,7 +280,7 @@ def _merge_chunk_summaries(
         "total_chunks": str(len(chunk_summaries)),
         "chunk_summaries": formatted,
     })
-    return _call_llm(system_prompt, user_prompt, settings)
+    return _call_llm(system_prompt, user_prompt, settings, cache=cache)
 
 
 def _parallel_summarize(
@@ -263,6 +289,7 @@ def _parallel_summarize(
     prompts: dict,
     settings: dict,
     max_workers: int = 4,
+    cache=None,
 ) -> list[str]:
     """청크 목록을 병렬로 요약합니다.
 
@@ -273,7 +300,7 @@ def _parallel_summarize(
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
-            executor.submit(_compile_single_chunk, chunk, source_file, prompts, settings): chunk
+            executor.submit(_compile_single_chunk, chunk, source_file, prompts, settings, cache): chunk
             for chunk in chunks
         }
         for future in as_completed(futures):
@@ -290,6 +317,7 @@ def _compile_map_reduce_chunks(
     prompts: dict,
     settings: dict,
     max_workers: int = 4,
+    cache=None,
 ) -> str:
     """map_reduce 전략: 청크 병렬 요약 → 최종 통합.
 
@@ -297,9 +325,9 @@ def _compile_map_reduce_chunks(
         최종 wiki 항목 마크다운 텍스트 (펜스 제거 전)
     """
     logger.info("  Map-Reduce: %d개 청크 병렬 요약 시작", len(chunks))
-    summaries = _parallel_summarize(chunks, source_file, prompts, settings, max_workers)
+    summaries = _parallel_summarize(chunks, source_file, prompts, settings, max_workers, cache=cache)
     logger.info("  Map-Reduce: 최종 통합 중...")
-    return _merge_chunk_summaries(summaries, source_file, wiki_index, prompts, settings)
+    return _merge_chunk_summaries(summaries, source_file, wiki_index, prompts, settings, cache=cache)
 
 
 def _compile_hierarchical_chunks(
@@ -309,6 +337,7 @@ def _compile_hierarchical_chunks(
     prompts: dict,
     settings: dict,
     max_workers: int = 4,
+    cache=None,
 ) -> str:
     """hierarchical 전략: L2 청크 → 그룹별 L1 요약 → 최종 통합.
 
@@ -332,17 +361,17 @@ def _compile_hierarchical_chunks(
     for g_num in group_keys:
         g_chunks = groups[g_num]
         logger.info("  그룹 %d/%d: %d개 청크 병렬 요약", g_num + 1, total_groups, len(g_chunks))
-        g_summaries = _parallel_summarize(g_chunks, source_file, prompts, settings, max_workers)
+        g_summaries = _parallel_summarize(g_chunks, source_file, prompts, settings, max_workers, cache=cache)
         logger.info("  그룹 %d/%d: L1 요약 생성 중", g_num + 1, total_groups)
         l1_summary = _merge_chunk_summaries(
             g_summaries, source_file,
             f"(그룹 {g_num + 1}/{total_groups} 중간 요약)",
-            prompts, settings,
+            prompts, settings, cache=cache,
         )
         l1_summaries.append(l1_summary)
 
     logger.info("  Hierarchical: 전체 L1 요약 최종 통합 중...")
-    return _merge_chunk_summaries(l1_summaries, source_file, wiki_index, prompts, settings)
+    return _merge_chunk_summaries(l1_summaries, source_file, wiki_index, prompts, settings, cache=cache)
 
 
 # ──────────────────────────────────────────────
@@ -357,6 +386,7 @@ def compile_document(
     wiki_root: Path | None = None,
     max_workers: int = 4,
     update_index: bool = True,
+    cache=None,
 ) -> dict:
     """마크다운 문서 하나를 LLM으로 컴파일해 wiki 항목을 생성합니다.
 
@@ -393,6 +423,11 @@ def compile_document(
         prompts = load_prompts()
     if wiki_root is None:
         wiki_root = _PROJECT_ROOT / settings["paths"]["wiki"]
+
+    # ── 캐시 초기화 (settings 기반, 외부에서 주입 가능) ──
+    if cache is None:
+        from scripts.cache import make_cache_from_settings
+        cache = make_cache_from_settings(settings)
 
     source_path = Path(source_path)
     if not source_path.exists():
@@ -431,7 +466,7 @@ def compile_document(
             "content": raw_text,
         })
         logger.info("LLM 호출 중 (single_pass)...")
-        llm_output = _call_llm(system_prompt, user_prompt, settings)
+        llm_output = _call_llm(system_prompt, user_prompt, settings, cache=cache)
         chunk_count = 1
 
     elif strategy == "map_reduce":
@@ -440,7 +475,7 @@ def compile_document(
         chunks = chunk_document(raw_text, doc_name=doc_name, settings=settings)
         chunk_count = len(chunks)
         llm_output = _compile_map_reduce_chunks(
-            chunks, source_rel, wiki_index, prompts, settings, max_workers,
+            chunks, source_rel, wiki_index, prompts, settings, max_workers, cache=cache,
         )
 
     else:
@@ -449,7 +484,7 @@ def compile_document(
         chunks = chunk_document(raw_text, doc_name=doc_name, settings=settings)
         chunk_count = len(chunks)
         llm_output = _compile_hierarchical_chunks(
-            chunks, source_rel, wiki_index, prompts, settings, max_workers,
+            chunks, source_rel, wiki_index, prompts, settings, max_workers, cache=cache,
         )
 
     # ── 결과 파싱 및 저장 ──

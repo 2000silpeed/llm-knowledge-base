@@ -41,6 +41,14 @@ def _is_url(s: str) -> bool:
     return s.startswith("http://") or s.startswith("https://")
 
 
+def _is_youtube_url(s: str) -> bool:
+    return "youtube.com" in s or "youtu.be" in s
+
+
+def _is_github_url(s: str) -> bool:
+    return "github.com" in s
+
+
 def _load_settings_safe() -> dict:
     """설정 로드 실패 시 명확한 오류 메시지 출력 후 종료."""
     try:
@@ -52,6 +60,18 @@ def _load_settings_safe() -> dict:
             "프로젝트 루트 디렉토리에서 실행하고 있는지 확인하세요."
         )
         raise typer.Exit(code=1)
+
+
+def _load_team_paths(settings: dict) -> tuple[Path, Path]:
+    """settings + team.yaml 을 참고해 (raw_dir, wiki_dir) 를 반환합니다.
+
+    팀 모드 비활성 시 settings.yaml 기준 기본 경로를 반환.
+    """
+    from scripts.team import load_team_config, get_raw_dir, get_wiki_dir
+    team_config = load_team_config()
+    raw_dir = get_raw_dir(settings, team_config, _PROJECT_ROOT)
+    wiki_dir = get_wiki_dir(settings, team_config, _PROJECT_ROOT)
+    return raw_dir, wiki_dir
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -73,7 +93,17 @@ def ingest(
     ) as progress:
         task = progress.add_task("인제스트 중...", total=None)
 
-        if _is_url(source):
+        if _is_url(source) and _is_youtube_url(source):
+            progress.update(task, description=f"YouTube 자막 수집 중: {source[:60]}...")
+            from scripts.ingest_youtube import ingest_youtube
+            result = ingest_youtube(source, project_root=_PROJECT_ROOT, settings=settings)
+
+        elif _is_url(source) and _is_github_url(source):
+            progress.update(task, description=f"GitHub 레포 수집 중: {source[:60]}...")
+            from scripts.ingest_github import ingest_github
+            result = ingest_github(source, project_root=_PROJECT_ROOT, settings=settings)
+
+        elif _is_url(source):
             progress.update(task, description=f"웹 아티클 수집 중: {source[:60]}...")
             from scripts.ingest_web import ingest_url
             result = ingest_url(source, project_root=_PROJECT_ROOT, settings=settings)
@@ -105,7 +135,7 @@ def ingest(
             else:
                 err_console.print(
                     f"[bold red]오류:[/] 지원하지 않는 파일 형식입니다: {suffix}\n"
-                    "지원 형식: .pdf, .xlsx, .xls, .xlsm, .pptx, .docx, .md, .txt, URL"
+                    "지원 형식: .pdf, .xlsx, .xls, .xlsm, .pptx, .docx, .md, .txt, URL, YouTube URL, GitHub URL"
                 )
                 raise typer.Exit(code=1)
 
@@ -165,11 +195,20 @@ def compile(
     dry_run: bool = typer.Option(False, "--dry-run", help="변경 감지만 하고 실제 컴파일은 생략"),
     no_index: bool = typer.Option(False, "--no-index", help="인덱스 자동 갱신 생략"),
     max_workers: int = typer.Option(4, "--workers", "-w", help="병렬 LLM 호출 쓰레드 수"),
+    resume: bool = typer.Option(False, "--resume", help="중단된 --all 컴파일을 체크포인트에서 재시작"),
+    clear_checkpoint: bool = typer.Option(False, "--clear-checkpoint", help="체크포인트 초기화 후 종료"),
 ) -> None:
     """raw/ 파일을 LLM으로 컴파일해 wiki/ 항목을 생성합니다.
 
     옵션 없이 실행 시 --changed 와 동일하게 동작합니다.
+    대용량(1000건+) 처리 시 --all --workers 8 --resume 조합을 권장합니다.
     """
+    if clear_checkpoint:
+        from scripts.perf import clear_checkpoint as _clear
+        _clear()
+        console.print("[green]체크포인트를 초기화했습니다.[/]")
+        return
+
     settings = _load_settings_safe()
 
     # 옵션 없으면 --changed 기본
@@ -179,7 +218,7 @@ def compile(
     if file:
         _compile_single(file, settings, not no_index, max_workers)
     elif all:
-        _compile_all(settings, not no_index, max_workers)
+        _compile_all(settings, not no_index, max_workers, resume_checkpoint=resume)
     else:
         _compile_changed(settings, dry_run, not no_index, max_workers)
 
@@ -204,41 +243,75 @@ def _compile_single(file_path: str, settings: dict, update_index: bool, max_work
     _print_compile_result(result)
 
 
-def _compile_all(settings: dict, update_index: bool, max_workers: int) -> None:
-    raw_dir = _PROJECT_ROOT / settings["paths"]["raw"]
-    md_files = list(raw_dir.rglob("*.md"))
+def _compile_all(
+    settings: dict,
+    update_index: bool,
+    max_workers: int,
+    *,
+    resume_checkpoint: bool = False,
+) -> None:
+    raw_dir, wiki_dir = _load_team_paths(settings)
+    images_dir = raw_dir / "images"
+    md_files = [
+        f for f in raw_dir.rglob("*.md")
+        if f.is_file() and images_dir not in f.parents
+    ]
     if not md_files:
         console.print("[yellow]raw/ 디렉토리에 마크다운 파일이 없습니다.[/]")
         return
 
-    console.print(f"[dim]총 {len(md_files)}개 파일 컴파일...[/]")
-    from scripts.compile import compile_document
+    if resume_checkpoint:
+        from scripts.perf import load_checkpoint
+        done = load_checkpoint()
+        remaining = len(md_files) - len([f for f in md_files if str(f) in done])
+        console.print(
+            f"[dim]총 {len(md_files)}개 파일 (체크포인트: {len(done)}개 완료, "
+            f"남은 {remaining}개 처리)[/]"
+        )
+    else:
+        console.print(f"[dim]총 {len(md_files)}개 파일 병렬 컴파일 (workers={max_workers})[/]")
 
-    success, fail = 0, 0
-    for i, md_file in enumerate(md_files, 1):
-        console.print(f"  [{i}/{len(md_files)}] {md_file.relative_to(_PROJECT_ROOT)}", end=" ")
-        try:
-            r = compile_document(
-                md_file,
-                settings=settings,
-                update_index=(update_index and i == len(md_files)),  # 마지막 파일만 인덱스 갱신
-                max_workers=max_workers,
-            )
-            console.print(f"[green]✓[/] [dim]{r['concept']}[/] ({r['strategy']})")
-            success += 1
-        except Exception as e:
-            console.print(f"[red]✗[/] [dim]{e}[/]")
-            fail += 1
+    from scripts.perf import compile_batch
+    result = compile_batch(
+        md_files,
+        settings=settings,
+        wiki_root=wiki_dir,
+        max_workers=max_workers,
+        update_index=update_index,
+        resume_checkpoint=resume_checkpoint,
+        show_progress=True,
+    )
 
-    console.print(f"\n[bold]완료:[/] 성공 [green]{success}[/] / 실패 [red]{fail}[/]")
+    success = len(result["compiled"])
+    fail = len(result["errors"])
+    skipped = result["skipped_checkpoint"]
+
+    for err in result["errors"]:
+        console.print(f"  [red]✗[/] {Path(err['source']).name}: [dim]{err['error']}[/]")
+
+    summary_parts = [f"[green]성공 {success}[/]"]
+    if fail:
+        summary_parts.append(f"[red]실패 {fail}[/]")
+    if skipped:
+        summary_parts.append(f"[dim]체크포인트 건너뜀 {skipped}[/]")
+    console.print(f"\n[bold]완료:[/] {' / '.join(summary_parts)}")
+
+    if fail and not resume_checkpoint:
+        console.print(
+            "[yellow]일부 파일 실패. --resume 플래그로 재시작하면 완료된 파일을 건너뜁니다.[/]"
+        )
 
 
 def _compile_changed(settings: dict, dry_run: bool, update_index: bool, max_workers: int) -> None:
     from scripts.incremental import compile_changed as _cc
 
+    raw_dir, wiki_dir = _load_team_paths(settings)
+
     with Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True, console=console) as p:
         p.add_task("변경 파일 감지 중...", total=None)
         result = _cc(
+            raw_dir=raw_dir,
+            wiki_root=wiki_dir,
             settings=settings,
             dry_run=dry_run,
             check_conflicts=True,
@@ -361,9 +434,7 @@ def query(
 def status() -> None:
     """지식 베이스 현황을 요약합니다 (raw 건수, wiki 건수, gaps 수)."""
     settings = _load_settings_safe()
-
-    raw_dir = _PROJECT_ROOT / settings["paths"]["raw"]
-    wiki_dir = _PROJECT_ROOT / settings["paths"]["wiki"]
+    raw_dir, wiki_dir = _load_team_paths(settings)
 
     # ── raw 통계 ──
     raw_counts: dict[str, int] = {}
@@ -436,6 +507,196 @@ def status() -> None:
         console.print(f"  [yellow]⚠[/] 충돌 감지됨 — wiki/conflicts/ 를 확인하세요.")
     if n_stubs:
         console.print(f"  [cyan]·[/] stub 개념 {n_stubs}개 — `kb compile --changed` 로 채울 수 있습니다.")
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# share
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@app.command()
+def share(
+    name: str = typer.Argument(..., help="공유할 개념명 또는 탐색 슬러그"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="저장 디렉토리 (기본: exports/)"),
+) -> None:
+    """wiki 개념 또는 탐색 기록을 스탠드얼론 HTML로 내보냅니다."""
+    settings = _load_settings_safe()
+    out_dir = Path(output) if output else _PROJECT_ROOT / "exports"
+
+    from scripts.share import export_wiki_page
+    result = export_wiki_page(name, settings=settings, output_dir=out_dir, project_root=_PROJECT_ROOT)
+
+    if result.get("status") == "error":
+        err_console.print(f"[bold red]오류:[/] {result.get('message', '알 수 없는 오류')}")
+        raise typer.Exit(code=1)
+
+    title = result["title"]
+    path = result["path"]
+    section = result["section"]
+    section_label = "개념" if section == "concepts" else "탐색 기록"
+
+    console.print(
+        Panel(
+            f"[bold green]✓ HTML 내보내기 완료[/]\n\n"
+            f"  제목:    [cyan]{title}[/]\n"
+            f"  구분:    {section_label}\n"
+            f"  저장 위치: [dim]{path}[/]\n\n"
+            "[dim]이 파일을 그대로 공유하거나 웹 서버에 업로드하세요.[/]",
+            title="[bold]kb share[/]",
+            expand=False,
+        )
+    )
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# cache (P2-08: API 비용 최적화)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@app.command(name="cache")
+def cache_cmd(
+    stats: bool = typer.Option(False, "--stats", help="캐시 통계 출력"),
+    clear: bool = typer.Option(False, "--clear", help="캐시 전체 삭제"),
+    evict: bool = typer.Option(False, "--evict", help="만료된 항목만 삭제"),
+) -> None:
+    """LLM 응답 캐시를 관리합니다 (P2-08).
+
+    옵션 없이 실행 시 캐시 통계를 출력합니다.
+    """
+    from scripts.cache import CacheStore
+    settings = _load_settings_safe()
+    cfg = settings.get("cache", {})
+    cache = CacheStore(
+        ttl_days=cfg.get("ttl_days", 0),
+        enabled=cfg.get("enabled", True),
+    )
+
+    if clear:
+        n = cache.clear()
+        console.print(f"[green]캐시 삭제 완료:[/] {n}개 항목")
+        return
+
+    if evict:
+        n = cache.evict_expired()
+        console.print(f"[yellow]만료 캐시 정리:[/] {n}개 항목 삭제")
+        return
+
+    # 기본: 통계 출력
+    disk = cache.disk_stats()
+    enabled_label = "[green]활성화[/]" if cfg.get("enabled", True) else "[red]비활성화[/]"
+    ttl_label = f"{cfg.get('ttl_days', 0)}일" if cfg.get("ttl_days", 0) > 0 else "영구"
+
+    console.print()
+    console.print(Panel(
+        f"[bold]캐시 상태:[/] {enabled_label}\n"
+        f"  유효 기간: [yellow]{ttl_label}[/]\n\n"
+        f"[bold]디스크 통계[/]\n"
+        f"  저장 항목:  [cyan]{disk['total']}[/]개\n"
+        f"  총 크기:    [cyan]{disk['size_kb']:,}[/] KB\n"
+        f"  누적 히트:  [cyan]{disk['total_hits']}[/]회",
+        title="[bold]kb cache[/]",
+        expand=False,
+    ))
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# team (P2-06: 팀 지식베이스)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+team_app = typer.Typer(name="team", help="팀 지식베이스를 관리합니다 (P2-06).")
+app.add_typer(team_app)
+
+
+@team_app.command("init")
+def team_init(
+    shared_raw: str = typer.Argument(..., help="공유 raw 디렉토리 경로 (절대/상대)"),
+    member: str = typer.Argument(..., help="현재 멤버 ID (예: alice)"),
+    wiki: Optional[str] = typer.Option(None, "--wiki", "-w", help="개인 wiki 경로 (기본: wiki/{member}/)"),
+) -> None:
+    """팀 지식베이스 설정을 초기화합니다.
+
+    공유 raw/ 디렉토리와 현재 멤버의 개인 wiki/ 경로를 config/team.yaml에 저장합니다.
+    """
+    from scripts.team import init_team
+    try:
+        config_path = init_team(
+            shared_raw=shared_raw,
+            member_id=member,
+            wiki_path=wiki,
+            project_root=_PROJECT_ROOT,
+        )
+        console.print(
+            Panel(
+                f"[bold green]✓ 팀 설정 초기화 완료[/]\n\n"
+                f"  공유 raw:  [dim]{shared_raw}[/]\n"
+                f"  멤버:      [cyan]{member}[/]\n"
+                f"  내 wiki:   [dim]{wiki or f'wiki/{member}'}[/]\n\n"
+                f"  설정 파일: [dim]{config_path}[/]\n\n"
+                "[dim]팀원 추가: kb team add <id> --wiki <경로>[/]",
+                title="[bold]kb team init[/]",
+                expand=False,
+            )
+        )
+    except Exception as e:
+        err_console.print(f"[bold red]오류:[/] {e}")
+        raise typer.Exit(code=1)
+
+
+@team_app.command("add")
+def team_add(
+    member: str = typer.Argument(..., help="추가할 멤버 ID"),
+    wiki: Optional[str] = typer.Option(None, "--wiki", "-w", help="해당 멤버의 wiki 경로"),
+) -> None:
+    """팀에 멤버를 추가합니다."""
+    from scripts.team import add_member
+    try:
+        config = add_member(member_id=member, wiki_path=wiki)
+        wiki_path = next(
+            (m["wiki"] for m in config.get("members", []) if m["id"] == member),
+            f"wiki/{member}",
+        )
+        console.print(f"[green]✓ 멤버 추가:[/] {member} → [dim]{wiki_path}[/]")
+    except (FileNotFoundError, ValueError) as e:
+        err_console.print(f"[bold red]오류:[/] {e}")
+        raise typer.Exit(code=1)
+
+
+@team_app.command("status")
+def team_status_cmd() -> None:
+    """팀 전체 지식베이스 현황을 출력합니다."""
+    from scripts.team import load_team_config, team_status
+
+    settings = _load_settings_safe()
+    team_config = load_team_config()
+
+    if team_config is None:
+        err_console.print(
+            "[bold red]오류:[/] 팀 설정이 없습니다.\n"
+            "먼저 `kb team init <shared_raw> <member>` 를 실행하세요."
+        )
+        raise typer.Exit(code=1)
+
+    status = team_status(settings, team_config, project_root=_PROJECT_ROOT)
+
+    # 멤버별 행 구성
+    member_lines = []
+    for m in status["members"]:
+        current_mark = " [bold cyan]◀ 현재[/]" if m["id"] == status["current_member"] else ""
+        member_lines.append(
+            f"  [cyan]{m['id']}[/]{current_mark}\n"
+            f"    wiki:      [dim]{m['wiki']}[/]\n"
+            f"    개념 항목: [yellow]{m['concepts']}[/]개 / "
+            f"탐색 기록: [yellow]{m['explorations']}[/]개"
+        )
+
+    console.print()
+    console.print(Panel(
+        f"[bold]공유 raw/[/]\n"
+        f"  경로:  [dim]{status['shared_raw']}[/]\n"
+        f"  파일:  [yellow]{status['raw_count']}[/]건\n\n"
+        f"[bold]팀원 ({len(status['members'])}명)[/]\n"
+        + "\n\n".join(member_lines),
+        title="[bold]kb team status[/]",
+        expand=False,
+    ))
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

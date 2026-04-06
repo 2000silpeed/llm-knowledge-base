@@ -5,6 +5,66 @@
 
 ---
 
+## HO-014 | 2026-04-06 | P2-06 + P2-08
+
+**완료:** Phase 2 마지막 두 태스크 완료 — Phase 2 전체 완료
+- `scripts/cache.py` — 신규 생성: LLM 응답 파일 캐시 (P2-08)
+- `scripts/team.py` — 신규 생성: 팀 지식베이스 설정/경로 관리 (P2-06)
+- `scripts/compile.py` — `_call_llm()` + 내부 함수 캐시 파라미터 추가
+- `scripts/perf.py` — `compile_batch()` / `_compile_one_with_retry()` 캐시 주입
+- `scripts/cli.py` — `kb cache` / `kb team init|add|status` 명령어 추가, 팀 경로 자동 적용
+- `config/settings.yaml` — `cache:` 섹션 추가 (`enabled`, `ttl_days`)
+
+**결정사항:**
+- **P2-08 캐싱 전략:**
+  - 캐시 키: SHA256(model + "|" + system_prompt + "|" + user_prompt) — 완전 결정적
+  - 저장: `.kb_cache/{key[:2]}/{key}.json` — 디렉토리 샤딩으로 파일 수 분산
+  - 배치 컴파일 시 모든 파일이 동일 `CacheStore` 공유 → 동일 청크 포함 문서 히트 가능
+  - `enabled: true` / `ttl_days: 0` (영구) 기본값 — 운영 중 비활성화 시 settings.yaml 수정
+- **P2-06 팀 설계:**
+  - `config/team.yaml` 존재 시 자동 팀 모드 활성 — 별도 플래그 불필요
+  - 모든 기존 명령어(`compile`, `status` 등)가 `_load_team_paths()`로 경로 자동 해석
+  - `shared_raw`는 절대/상대 경로 모두 지원 (네트워크 드라이브, git 서브모듈 등)
+  - 멤버별 wiki 경로는 team.yaml의 `members[].wiki` — 없으면 `wiki/{member_id}/` fallback
+
+**주의:**
+- `cache.py`의 `CacheStore`는 쓰레드 안전 (파일 기반, GIL 보호) — 병렬 배치에서 공유 가능
+- `team.yaml` 없으면 팀 모드 자동 비활성 → 기존 단일 사용자 방식 그대로 동작 (하위 호환)
+- `compile.py`에서 `cache` 파라미터 기본값 `None` → `None`이면 내부에서 `make_cache_from_settings()` 자동 생성
+- `.kb_cache/`는 `.gitignore`에 추가 권장 (API 응답은 재현 가능, 버전 관리 불필요)
+
+**다음:** Phase 3 — P3-01 (클라우드 호스팅) 또는 서비스 안정화
+
+---
+
+## HO-013 | 2026-04-06 | P2-07
+
+**완료:** 대용량 성능 최적화 (1000건+) 구현
+- `scripts/perf.py` — 신규 생성: 병렬 배치 컴파일 / 역방향 소스 인덱스 / 병렬 해시 / 체크포인트
+- `scripts/incremental.py` — `find_changed_files()` 병렬 해시 + `compile_changed()` 배치 처리로 교체
+- `scripts/cli.py` — `_compile_all()` → `compile_batch()` 사용 + `--resume` / `--clear-checkpoint` 옵션 추가
+
+**결정사항:**
+- 핵심 병목 4가지 해결:
+  1. **순차 컴파일 → 병렬**: `compile_batch()` + `ThreadPoolExecutor(max_workers)` — 1000건 처리 시 ~4배 속도 향상
+  2. **파일별 인덱스 갱신 → 배칭**: `update_index=False`로 각 파일 컴파일, 전체 완료 후 1회 갱신 — LLM 2000회 → 2회 절감
+  3. **O(n²) 관련 개념 탐색 → O(1)**: `.kb_source_index.json` 역방향 인덱스 캐시, mtime 기반 자동 무효화
+  4. **순차 해시 계산 → 병렬**: `hash_files_parallel()`, 1000파일 해시 ~8배 빠름
+- `inner_workers=1` (외부 max_workers≥4 시): 쓰레드 폭발 방지 (outer×inner 제한)
+- Rate limit 자동 재시도: exponential backoff (2→4→8→16→32초, 최대 5회)
+- 체크포인트(`.kb_checkpoint.json`): `--resume` 시 완료 파일 건너뜀, 중단 후 재시작 가능
+- 역방향 인덱스(`.kb_source_index.json`): 새 wiki 파일 생성 시 자동 무효화 → 다음 `compile_changed` 시 재빌드
+
+**주의:**
+- `compile_batch()`는 progress bar를 `stderr`에 출력 (stdout은 깨끗하게 유지)
+- 체크포인트는 `--all` 전용 — `compile_changed()`는 체크포인트 미사용 (해시 스토어가 동일 역할)
+- `find_changed_files()` 병렬 해시: 10파일 미만이면 순차 처리 (threadpool 오버헤드 방지)
+- `_compile_all()`에서 images_dir 필터 추가 (이전 버전에서 누락되어 있었음)
+
+**다음:** P2-06 (팀 지식베이스) 또는 P2-08 (API 비용 최적화)
+
+---
+
 ## HO-001 | 2026-04-05 | 기획
 
 **완료:** 프로젝트 기획 및 문서 체계 수립
@@ -496,3 +556,120 @@
 - `rehype-highlight` 설치했으나 현재 코드 하이라이팅 미적용 — 필요 시 MarkdownRenderer에 추가
 
 **다음:** P2-02 (개념 그래프 뷰, D3.js) 또는 P2-03 (YouTube 자막 인제스터)
+
+---
+
+## HO-009 | 2026-04-06 | P2-02
+
+**완료:** 개념 그래프 뷰 구현 — D3.js 포스 다이렉트 그래프
+- `web/lib/wiki.ts` — `buildGraphData()`, `GraphNode`, `GraphEdge`, `GraphData` 추가 (extractWikiLinks 포함)
+- `web/app/api/graph/route.ts` — 그래프 데이터 JSON API (Dynamic)
+- `web/components/ConceptGraph.tsx` — D3.js 클라이언트 컴포넌트 (포스 시뮬레이션, 줌/팬, 드래그, 클릭 내비게이션)
+- `web/app/graph/page.tsx` — 그래프 페이지
+- `web/app/layout.tsx` — 사이드바에 "그래프" 링크 추가
+
+**결정사항:**
+- D3 v7 (`d3` + `@types/d3`) — pnpm으로 설치
+- `[[위키링크]]` 정규식 추출 → 개념/탐색 간 엣지 생성, 중복 엣지 제거 (방향 무관 dedup)
+- 노드 반지름 = `6 + (inDegree / maxDegree) * 14` — 연결 많을수록 큼
+- 색상: 개념 파랑(`#3b82f6`), 탐색 보라(`#8b5cf6`)
+- 줌/팬: `d3.zoom` 스케일 0.2~4x
+- 드래그로 노드 고정, 마우스 놓으면 fx/fy=null (재시뮬레이션)
+- 클릭 → `router.push()` (concepts/ 또는 explorations/)
+- 범례 + 호버 툴팁 (절대 포지션 오버레이)
+- `pnpm build` 통과 — `/graph` 는 Static 페이지, `/api/graph` 는 Dynamic API
+
+**주의:**
+- `ConceptGraph.tsx` 는 `"use client"` — SSR 불가, D3 DOM 접근은 useEffect 내부에서만
+- 개념 수가 많아지면 포스 시뮬레이션 성능 저하 가능 → P2-07(대용량 최적화)에서 처리
+- `extractWikiLinks()`는 `[[링크|별칭]]`, `[[링크#섹션]]` 형식도 처리 (파이프/샵 이후 제거)
+- `inDegree` 초기화를 allSlugs 기반으로 함 — 링크가 없는 노드도 0으로 정상 포함
+
+**다음:** P2-03 (YouTube 자막 인제스터)
+
+---
+
+## HO-010 | 2026-04-06 | P2-03
+
+**완료:** YouTube 자막 인제스터 구현
+- `scripts/ingest_youtube.py` — YouTube URL → 자막 추출 → 마크다운 변환 전체 구현
+- `scripts/cli.py` — `_is_youtube_url()` 추가 + ingest 라우팅에 YouTube 분기 추가
+- `pyproject.toml` — `youtube-transcript-api>=0.6.0` 의존성 추가
+
+**결정사항:**
+- `youtube-transcript-api` 채택 — API 키 불필요, 수동/자동 생성 자막 모두 지원
+- 메타데이터: YouTube oEmbed API (`youtube.com/oembed?url=...`) — API 키 없이 title/channel 조회
+- 언어 우선순위: ko → en → ja → zh-Hans → zh-Hant (수동 자막 먼저, 없으면 자동 생성)
+- 타임스탬프 섹션: 120초(2분) 단위로 `## [MM:SS](유튜브링크)` 헤더 생성
+  - 섹션 내 세그먼트들은 공백으로 연결해 단락으로 합침
+- 출력 경로: `raw/articles/{날짜}_yt_{슬러그}.md` (웹 아티클과 동일 디렉토리)
+- `.meta.yaml`: video_id, channel, language, is_generated_transcript, segment_count 포함
+- CLI: `youtube.com` 또는 `youtu.be` 포함 URL → ingest_youtube 자동 라우팅
+
+**주의:**
+- `TranscriptsDisabled` 예외: 자막 비활성 영상은 "error" status 반환 (크래시 없음)
+- oEmbed API 실패 시 title은 `"YouTube Video {video_id}"` fallback
+- `_fetch_transcript` 내부에서 `youtube_transcript_api` import — 설치 안 됐을 때 ImportError 명확
+- 지원 URL: `watch?v=`, `youtu.be/`, `/shorts/`, `/embed/` 4가지 패턴
+
+**다음:** P2-04 (GitHub 레포 인제스터)
+
+---
+
+## HO-012 | 2026-04-06 | P2-05
+
+**완료:** 위키 공유 기능 (읽기 전용 링크) 구현
+- `web/components/ShareButton.tsx` — 클립보드 복사 버튼 컴포넌트 ("use client")
+- `web/app/(share)/share/[type]/[slug]/page.tsx` — 사이드바 없는 클린 공유 뷰
+- `web/app/(share)/layout.tsx` — share 그룹 레이아웃 (pass-through)
+- `web/app/(main)/layout.tsx` — 사이드바 레이아웃 (기존 layout.tsx에서 분리)
+- `web/app/layout.tsx` — 루트 html/body only (사이드바 제거)
+- `web/app/(main)/concepts/[slug]/page.tsx` — ShareButton 추가
+- `web/app/(main)/explorations/[slug]/page.tsx` — ShareButton 추가
+- `scripts/share.py` — 스탠드얼론 HTML 내보내기 (의존성 없음, 자체 MD→HTML 변환)
+- `scripts/cli.py` — `kb share <개념명>` 명령어 추가
+
+**결정사항:**
+- Next.js route group 패턴 사용: `(main)` + `(share)` 분리 → 사이드바 없는 공유 뷰 구현
+  - 기존 모든 페이지를 `app/(main)/`로 이동, 공유 페이지는 `app/(share)/`
+  - URL은 변경 없음 (`/concepts/...` → `/concepts/...`, `/share/...` → `/share/...`)
+- 공유 URL: `/share/concepts/{slug}` 또는 `/share/explorations/{slug}` (읽기 전용 라벨 포함)
+- ShareButton: `navigator.clipboard.writeText()` + execCommand fallback (구형 브라우저 대응)
+- HTML 내보내기(`scripts/share.py`): 외부 의존성 없이 자체 MD→HTML 변환 내장
+  - 저장 위치: `exports/` (기본), `--output` 옵션으로 변경 가능
+  - 개념 탐색 순서: concepts/ 직접 매칭 → H1 스캔 → explorations/ 슬러그 포함 매칭
+
+**주의:**
+- `web/app/(main)/api/search/route.ts` 는 실수로 복사됨 → 삭제됨, 실제 API는 `app/api/search/route.ts` 유지
+- route group 이동 후 `app/layout.tsx` 는 html/body만 — 기존 metadata 선언은 `(main)/layout.tsx` 에 없음 (필요 시 추가)
+- `ShareButton`은 `"use client"` — 서버 컴포넌트에서 import 시 직접 렌더링은 가능, `useState` 내부 사용
+
+**다음:** P2-06 (팀 지식베이스) 또는 P2-07 (대용량 성능 최적화)
+
+---
+
+## HO-011 | 2026-04-06 | P2-04
+
+**완료:** GitHub 레포 인제스터 구현
+- `scripts/ingest_github.py` — GitHub URL → 파일 트리 탐색 → 마크다운 변환 전체 구현
+- `scripts/cli.py` — `_is_github_url()` 추가 + ingest 라우팅에 GitHub 분기 추가
+
+**결정사항:**
+- GitHub API v3 (raw.githubusercontent.com 으로 파일 내용 조회) — 추가 의존성 없음
+- 인증: `GITHUB_TOKEN` 환경변수 (선택적) — 없어도 공개 레포 60 req/hr 동작
+- 파일 선택 전략:
+  - README, pyproject.toml, package.json 등 `_PRIORITY_FILES` 최우선 수집 (priority 0)
+  - 루트에 가까울수록 우선, docs/ 폴더 우대
+  - 건너뛸 디렉토리: node_modules, __pycache__, .venv, dist, build, .next 등
+  - 단일 파일 최대 100KB, 전체 최대 60K 토큰, 최대 40파일
+- Markdown → 코드펜스 없이 삽입, 나머지는 언어 지정 코드펜스
+- 출력: `raw/repos/{날짜}_gh_{owner}-{repo}.md` (`.meta.yaml` 포함)
+- CLI: `github.com` 포함 URL → ingest_github 자동 라우팅
+
+**주의:**
+- `_fetch_tree()` API 응답이 `truncated: true` 이면 경고 로그 (10만 파일 초과 레포)
+- 토큰 예산 초과 파일은 `skipped` 리스트로 마크다운 상단 목차에 명시
+- `_parse_github_url()` 은 `/tree/branch` 포함 URL도 처리
+- Private 레포는 `GITHUB_TOKEN` 필수 (없으면 404 error 반환)
+
+**다음:** P2-05 (위키 공유 기능)

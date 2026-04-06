@@ -136,27 +136,39 @@ def find_changed_files(
     raw_dir: Path,
     hash_store: dict[str, str],
     project_root: Path,
+    *,
+    parallel: bool = True,
+    hash_workers: int = 8,
 ) -> list[tuple[Path, str]]:
     """변경된/새 raw/ 마크다운 파일 목록을 반환합니다.
 
     raw/images/ 하위는 건너뜁니다 (이미지 파일은 컴파일 대상 아님).
+    parallel=True(기본)이면 SHA256 해시 계산을 병렬로 수행합니다.
 
     Returns:
         [(파일경로, "new" | "modified")] 목록 (경로 순 정렬)
     """
-    changed: list[tuple[Path, str]] = []
     images_dir = raw_dir / "images"
 
-    for md_file in sorted(raw_dir.rglob("*.md")):
-        if not md_file.is_file():
-            continue
-        # raw/images/ 하위 마크다운(캡션 파일 등) 건너뜀
-        if images_dir in md_file.parents:
-            continue
+    candidates = [
+        md_file
+        for md_file in sorted(raw_dir.rglob("*.md"))
+        if md_file.is_file() and images_dir not in md_file.parents
+    ]
 
+    if parallel and len(candidates) > 10:
+        from scripts.perf import hash_files_parallel
+        hashes = hash_files_parallel(candidates, project_root=project_root, max_workers=hash_workers)
+    else:
+        hashes = {}
+        for f in candidates:
+            rel = str(f.relative_to(project_root))
+            hashes[rel] = compute_file_hash(f)
+
+    changed: list[tuple[Path, str]] = []
+    for md_file in candidates:
         rel = str(md_file.relative_to(project_root))
-        current_hash = compute_file_hash(md_file)
-
+        current_hash = hashes.get(rel, "")
         if rel not in hash_store:
             changed.append((md_file, "new"))
         elif hash_store[rel] != current_hash:
@@ -408,53 +420,74 @@ def compile_changed(
         logger.info("dry-run 모드 — 컴파일 수행하지 않음")
         return result
 
-    # ── 2. 파일별 처리 ──
-    for source_path, status in changed:
-        logger.info("처리 중 [%s]: %s", status, source_path.name)
+    # ── 2. 역방향 인덱스 로드 (관련 개념 탐색 O(1) 전환) ──
+    from scripts.perf import build_source_index, find_related_fast
+    source_index = build_source_index(wiki_root=wiki_root, settings=settings)
 
-        # 기존 관련 wiki 항목 백업 (충돌 감지용)
-        old_concept_snapshots: list[tuple[Path, str]] = []
-        if check_conflicts and status == "modified":
-            related = find_related_concepts(source_path, concepts_dir, project_root)
+    # ── 3. 충돌 감지용 기존 wiki 스냅샷 수집 (수정 파일만, 빠른 파일 I/O) ──
+    # {source_path_str: [(concept_path, old_content), ...]}
+    snapshots: dict[str, list[tuple[Path, str]]] = {}
+    if check_conflicts:
+        for source_path, status in changed:
+            if status != "modified":
+                continue
+            related = find_related_fast(
+                source_path,
+                source_index=source_index,
+                wiki_root=wiki_root,
+                settings=settings,
+            )
+            snaps: list[tuple[Path, str]] = []
             for concept_path in related:
                 try:
-                    old_content = concept_path.read_text(encoding="utf-8")
-                    old_concept_snapshots.append((concept_path, old_content))
+                    snaps.append((concept_path, concept_path.read_text(encoding="utf-8")))
                 except OSError:
                     pass
+            if snaps:
+                snapshots[str(source_path)] = snaps
 
-        # ── 3. 컴파일 ──
-        try:
-            compile_result = compile_document(
-                source_path,
-                settings=settings,
-                prompts=prompts,
-                wiki_root=wiki_root,
-                max_workers=max_workers,
-                update_index=True,
-            )
-            result["compiled"].append({
-                "source": str(source_path),
-                "concept": compile_result["concept"],
-                "wiki_path": compile_result["wiki_path"],
-                "strategy": compile_result["strategy"],
-                "status": status,
-            })
-            logger.info("  컴파일 완료: %s → %s", source_path.name, compile_result["concept"])
+    # ── 4. 병렬 배치 컴파일 ──
+    from scripts.perf import compile_batch
+    source_paths = [p for p, _ in changed]
+    batch_result = compile_batch(
+        source_paths,
+        settings=settings,
+        prompts=prompts,
+        wiki_root=wiki_root,
+        max_workers=max_workers,
+        update_index=True,          # 배치 완료 후 인덱스 1회 갱신
+        resume_checkpoint=False,    # 증분 컴파일은 체크포인트 미사용
+        show_progress=True,
+    )
 
-            # 해시 갱신
-            update_file_hash(hash_store, source_path, project_root)
-            save_hash_store(hash_store, store_path)
+    # 상태(new/modified) 정보 보강
+    status_map = {str(p): s for p, s in changed}
+    for item in batch_result["compiled"]:
+        item["status"] = status_map.get(item["source"], "new")
+        # 해시 갱신
+        sp = Path(item["source"])
+        update_file_hash(hash_store, sp, project_root)
 
-        except Exception as e:
-            logger.error("  컴파일 실패 (%s): %s", source_path.name, e)
-            result["errors"].append({"source": str(source_path), "error": str(e)})
-            continue
+    result["compiled"] = batch_result["compiled"]
+    result["errors"] = batch_result["errors"]
 
-        # ── 4. 충돌 감지 ──
-        if check_conflicts and old_concept_snapshots:
-            source_content = source_path.read_text(encoding="utf-8")
-            for old_concept_path, old_content in old_concept_snapshots:
+    # 오류 파일도 해시 갱신 건너뜀 → 다음 실행에서 재시도
+    # 단, hash_store는 성공 파일만 갱신했으므로 한 번에 저장
+    if batch_result["compiled"]:
+        save_hash_store(hash_store, store_path)
+
+    # ── 5. 충돌 감지 (수정 파일, 순차 처리) ──
+    compiled_sources = {item["source"] for item in result["compiled"]}
+    if check_conflicts:
+        for source_str, snaps in snapshots.items():
+            if source_str not in compiled_sources:
+                continue  # 컴파일 실패 파일은 충돌 감지 건너뜀
+            source_path = Path(source_str)
+            try:
+                source_content = source_path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            for old_concept_path, old_content in snaps:
                 try:
                     conflict_text = detect_conflict(
                         old_concept_path,
@@ -473,10 +506,7 @@ def compile_changed(
                         )
                         result["conflicts"].append(str(conflict_path))
                 except Exception as e:
-                    logger.warning(
-                        "  충돌 감지 실패 (%s): %s",
-                        old_concept_path.name, e,
-                    )
+                    logger.warning("충돌 감지 실패 (%s): %s", old_concept_path.name, e)
 
     skipped_count = sum(
         1 for md_file in raw_dir.rglob("*.md")

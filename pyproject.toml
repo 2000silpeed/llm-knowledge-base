@@ -24,6 +24,8 @@ dependencies = [
     "rich>=13.0.0",
     # 파일 감시
     "watchdog>=4.0.0",
+    # YouTube 자막
+    "youtube-transcript-api>=0.6.0",
     # 설정
     "pyyaml>=6.0.0",
 ]

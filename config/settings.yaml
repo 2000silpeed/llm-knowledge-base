@@ -44,6 +44,11 @@ ingest:
   image_download: true           # 외부 이미지 URL → 로컬 raw/images/ 저장 여부
   vision_caption: true           # 이미지 → Claude Vision API 캡션 자동 생성
 
+cache:
+  enabled: true       # LLM 응답 캐싱 활성화 (동일 입력 → API 미호출 → 비용 절감)
+  ttl_days: 0         # 캐시 유효 기간 (일). 0 = 영구 보존, 30 = 30일 후 만료
+  # 캐시 저장 위치: .kb_cache/ (자동)
+
 logging:
   level: INFO                    # DEBUG / INFO / WARNING / ERROR
   file: .kb.log

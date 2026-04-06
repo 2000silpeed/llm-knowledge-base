@@ -1,5 +1,6 @@
 import { getConcept, getAllConcepts } from "@/lib/wiki";
 import MarkdownRenderer from "@/components/MarkdownRenderer";
+import ShareButton from "@/components/ShareButton";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -25,10 +26,11 @@ export default async function ConceptPage({ params }: Props) {
 
   return (
     <article>
-      <div className="mb-6">
+      <div className="mb-6 flex items-center justify-between">
         <Link href="/concepts" className="text-sm text-gray-400 hover:text-blue-600">
           ← 개념 목록
         </Link>
+        <ShareButton type="concepts" slug={decodedSlug} />
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 p-8">

@@ -14,8 +14,13 @@ build/
 
 # 런타임 생성 파일
 .kb_hashes.json
+.kb_checkpoint.json
+.kb_source_index.json
 .kb.log
 *.log
+
+# LLM 응답 캐시 (P2-08)
+.kb_cache/
 
 # Obsidian 자동 생성
 wiki/.obsidian/workspace.json

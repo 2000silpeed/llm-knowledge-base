@@ -96,6 +96,82 @@ export function getRootFile(name: string): WikiFile | null {
   return readMarkdownFile(filePath, "root", slug);
 }
 
+// ── Graph data ───────────────────────────────────────────────
+
+export interface GraphNode {
+  id: string;      // slug
+  title: string;
+  group: "concept" | "exploration";
+  linkCount: number;
+}
+
+export interface GraphEdge {
+  source: string;  // slug
+  target: string;  // slug
+}
+
+export interface GraphData {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+/** [[위키링크]] 추출 */
+function extractWikiLinks(content: string): string[] {
+  const matches = content.matchAll(/\[\[([^\]|#]+?)(?:\|[^\]]+)?\]\]/g);
+  return [...matches].map((m) => m[1].trim().replace(/ /g, "_"));
+}
+
+export function buildGraphData(): GraphData {
+  const concepts = getAllConcepts();
+  const explorations = getAllExplorations();
+
+  const conceptSlugs = new Set(concepts.map((c) => c.slug));
+  const explorationSlugs = new Set(explorations.map((e) => e.slug));
+  const allSlugs = new Set([...conceptSlugs, ...explorationSlugs]);
+
+  // 노드별 링크 카운트 (in-degree)
+  const inDegree: Record<string, number> = {};
+  for (const slug of allSlugs) inDegree[slug] = 0;
+
+  const edges: GraphEdge[] = [];
+
+  for (const file of [...concepts, ...explorations]) {
+    const links = extractWikiLinks(file.content);
+    for (const target of links) {
+      if (allSlugs.has(target) && target !== file.slug) {
+        edges.push({ source: file.slug, target });
+        inDegree[target] = (inDegree[target] ?? 0) + 1;
+      }
+    }
+  }
+
+  // 중복 엣지 제거
+  const edgeSet = new Set<string>();
+  const uniqueEdges = edges.filter((e) => {
+    const key = [e.source, e.target].sort().join("→");
+    if (edgeSet.has(key)) return false;
+    edgeSet.add(key);
+    return true;
+  });
+
+  const nodes: GraphNode[] = [
+    ...concepts.map((c) => ({
+      id: c.slug,
+      title: c.title,
+      group: "concept" as const,
+      linkCount: inDegree[c.slug] ?? 0,
+    })),
+    ...explorations.map((e) => ({
+      id: e.slug,
+      title: e.title,
+      group: "exploration" as const,
+      linkCount: inDegree[e.slug] ?? 0,
+    })),
+  ];
+
+  return { nodes, edges: uniqueEdges };
+}
+
 // ── Search index ─────────────────────────────────────────────
 
 export function buildSearchIndex(): SearchDoc[] {
