@@ -1,7 +1,7 @@
 # Makefile — LLM 지식 베이스 단축 명령어
 # 사용: make <target>
 
-.PHONY: help start stop install web status compile query logs clean
+.PHONY: help start stop install web api api-keygen status compile logs clean
 
 # 기본 타겟
 help:
@@ -12,6 +12,8 @@ help:
 	@echo "  make stop        모든 프로세스 종료"
 	@echo "  make install     의존성 설치 (Python + Node)"
 	@echo "  make web         웹 UI만 시작 (http://localhost:3000)"
+	@echo "  make api         외부 연동 API 서버 시작 (http://localhost:8000)"
+	@echo "  make api-keygen  API 키 생성"
 	@echo "  make status      지식 베이스 현황"
 	@echo "  make compile     변경된 파일 컴파일"
 	@echo "  make logs        웹 UI 로그 실시간 확인"
@@ -35,6 +37,12 @@ install:
 web:
 	@chmod +x start.sh
 	@./start.sh --web
+
+api:
+	uv run kb api serve
+
+api-keygen:
+	uv run kb api keygen
 
 status:
 	uv run kb status

@@ -21,6 +21,9 @@ export default function MainLayout({
           <NavLink href="/gaps">갭 목록</NavLink>
           <NavLink href="/graph">그래프</NavLink>
           <NavLink href="/search">검색</NavLink>
+          <hr className="border-gray-100 my-1" />
+          <NavLink href="/clip">클리퍼</NavLink>
+          <NavLink href="/org">조직 관리</NavLink>
         </nav>
       </aside>
 

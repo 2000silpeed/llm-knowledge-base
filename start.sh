@@ -5,6 +5,7 @@
 #   ./start.sh          # CLI + 웹 UI 함께 시작
 #   ./start.sh --web    # 웹 UI만
 #   ./start.sh --no-web # CLI만 (환경변수 로드)
+#   ./start.sh --api    # 웹 UI + 외부 연동 API 서버 함께 시작
 #
 # 종료: ./stop.sh  또는  Ctrl+C
 
@@ -17,12 +18,15 @@ LOG_DIR="$SCRIPT_DIR/.logs"
 
 WEB_ONLY=false
 NO_WEB=false
+WITH_API=false
+API_PORT="${KB_API_PORT:-8000}"
 
 # ── 인자 파싱 ──
 for arg in "$@"; do
   case $arg in
     --web)    WEB_ONLY=true ;;
     --no-web) NO_WEB=true ;;
+    --api)    WITH_API=true ;;
   esac
 done
 
@@ -94,9 +98,23 @@ start_web() {
   cd "$SCRIPT_DIR"
 }
 
+# ── 외부 연동 API 서버 시작 ──
+start_api() {
+  local HOST="${KB_API_HOST:-0.0.0.0}"
+  info "외부 연동 API 서버 시작 중... (http://localhost:${API_PORT}/docs)"
+  uv run kb api serve --host "$HOST" --port "$API_PORT" \
+    > "$LOG_DIR/api.log" 2>&1 &
+  echo $! > "$PID_DIR/api.pid"
+}
+
 # ── 웹 UI 시작 여부 판단 ──
 if [ "$NO_WEB" = false ]; then
   start_web
+fi
+
+# ── API 서버 시작 여부 판단 ──
+if [ "$WITH_API" = true ]; then
+  start_api
 fi
 
 # ── 안내 메시지 ──
@@ -110,12 +128,18 @@ if [ "$NO_WEB" = false ]; then
   echo -e "  로그:   ${YELLOW}.logs/web.log${NC}"
 fi
 
+if [ "$WITH_API" = true ]; then
+  echo -e "  API:    ${YELLOW}http://localhost:${API_PORT}/docs${NC}"
+  echo -e "  로그:   ${YELLOW}.logs/api.log${NC}"
+fi
+
 echo ""
 echo -e "  CLI 사용 예:"
 echo -e "    uv run kb ingest <파일/URL>"
 echo -e "    uv run kb compile"
 echo -e "    uv run kb query \"질문\""
 echo -e "    uv run kb status"
+echo -e "    uv run kb api keygen    (API 키 생성)"
 echo ""
 echo -e "  종료: ${YELLOW}./stop.sh${NC}  또는  ${YELLOW}Ctrl+C${NC}"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"

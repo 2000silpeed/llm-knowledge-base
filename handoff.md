@@ -5,6 +5,116 @@
 
 ---
 
+## HO-022 | 2026-04-06 | P3-04
+
+**완료:** 외부 연동 REST API 서버 구현
+- `scripts/api_server.py` — FastAPI 기반 REST API 서버 신규 생성
+  - GET /v1/health, /v1/status, /v1/index
+  - GET /v1/concepts, /v1/concepts/{slug}, /v1/search
+  - POST /v1/ingest (URL/텍스트), /v1/query
+  - GET|POST|DELETE /v1/webhooks
+  - OpenAPI 문서 자동 생성 (/docs, /redoc)
+- `scripts/cli.py` — `kb api` 명령어 그룹 추가
+  - `kb api serve` — 서버 시작
+  - `kb api keygen/keys/revoke` — API 키 관리
+  - `kb api webhooks/webhook-add/webhook-del` — Webhook 관리
+- `pyproject.toml` — fastapi, uvicorn[standard], httpx 의존성 추가
+- `start.sh` — `--api` 플래그 추가 (API 서버 선택적 시작)
+- `Makefile` — `make api`, `make api-keygen` 타겟 추가
+- `.env.example` — KB_API_HOST/PORT/KEYS_ENABLED/CORS_ORIGINS 항목 추가
+
+**결정사항:**
+- **FastAPI 채택** (Flask/aiohttp 대신): 자동 OpenAPI 문서, Pydantic 모델, 비동기 지원
+- **인증 방식**: SHA-256 해시 저장 (`config/api_keys.yaml`) — 원본 키는 한 번만 표시, 이후 복구 불가
+  - `X-API-Key` 헤더 또는 `Authorization: Bearer` 모두 지원
+  - `KB_API_KEYS_ENABLED=false`로 로컬 환경에서 인증 비활성화 가능
+- **Webhook**: `config/webhooks.yaml` 저장, HMAC-SHA256 서명 옵션 지원
+  - 이벤트: concept.created, concept.updated, ingest.completed, query.completed
+  - 비동기 httpx 전송, 실패 시 조용히 무시 (서비스 안정성 우선)
+- **인제스트 API**: 기존 `kb ingest` CLI를 subprocess로 호출 — 비즈니스 로직 중복 없음
+- **CORS**: 기본 전체 허용, `KB_API_CORS_ORIGINS`으로 실서비스 제한 가능
+- **별도 포트**: 웹 UI(3000)와 API 서버(8000) 분리 — 충돌 없음
+
+**주의:**
+- `httpx` 패키지가 설치되어야 Webhook 전송 동작 — 이미 pyproject.toml에 추가됨
+- `fastapi>=0.115` + `starlette>=1.0` 조합 — 기존 Next.js 의존성과 무관
+- API 서버는 `uv run kb api serve` 또는 `make api`로 별도 실행 (start.sh --api로도 가능)
+- `config/api_keys.yaml`: 해시만 저장, 원본 키 분실 시 새 키 발급 필요
+- 인제스트 POST는 백그라운드가 아닌 동기 실행 (120초 타임아웃) — 대용량 파일은 오래 걸릴 수 있음
+
+**다음:** Phase 3 전체 완료. 서비스 안정화 또는 신규 기능 기획.
+
+---
+
+## HO-021 | 2026-04-06 | P3-03
+
+**완료:** 조직 단위 지식 관리 구현
+- `scripts/org.py` — 신규 생성: 조직/팀/멤버 계층 관리 + RBAC + 활동 로그 + 조직 공유 위키 컴파일
+- `scripts/cli.py` — `kb org` 명령어 그룹 추가 (init / team create|list / member add|role|remove|list / stats / log / wiki)
+- `web/app/api/org/route.ts` — GET /api/org 엔드포인트 (stats / log / members 액션)
+- `web/app/(main)/org/page.tsx` — 조직 대시보드 UI (통계 카드, 팀 카드, 활동 로그)
+- `web/app/(main)/layout.tsx` — 사이드바에 "조직 관리" 링크 추가
+
+**결정사항:**
+- **P2-06 팀 위에 조직 계층 추가**: 기존 team.yaml은 그대로 유지, org.yaml이 독립적으로 조직 구조를 관리
+  - 팀(P2-06)은 2인 이상 소규모 협업, 조직(P3-03)은 여러 팀을 아우르는 엔터프라이즈 단위
+- **RBAC 3단계**: admin(모든 권한) / editor(인제스트+컴파일) / viewer(읽기 전용)
+  - `ROLE_PERMISSIONS` dict로 권한 집합 관리 → 새 권한 추가 시 단일 위치 수정
+- **활동 로그 JSONL**: `config/org_activity.jsonl` — 파일 append 방식, 재시작 없이 실시간 기록
+  - 멤버/팀별 필터링 지원, 최신순 정렬
+- **조직 공유 위키 컴파일 전략**:
+  - 단일 소스 개념: `shutil.copy2` (LLM 비용 없음)
+  - 다중 소스 동일 개념: 임시 파일에 버전별 내용 합친 뒤 `compile_document` 호출 → LLM 병합
+- **웹 API**: js-yaml 미설치 → Python subprocess (`uv run python -c "..."`) 로 JSON 출력
+  - 조직 설정 없을 때 404 + 명확한 안내 메시지
+
+**주의:**
+- `org.yaml`과 `team.yaml`은 독립 파일 — 팀 기능(P2-06)은 org 없이도 동작 (하위 호환)
+- `compile_org_wiki()` 내부에서 `scripts.compile.compile_document` 임포트 → compile.py 시그니처 변경 시 영향
+- 웹 API는 `uv run python -c` 로 subprocess 실행 — 응답 지연 있을 수 있음 (30초 타임아웃)
+- `org_activity.jsonl` 없으면 활동 로그 엔드포인트는 빈 배열 반환 (에러 없음)
+
+**다음:** P3-04 (외부 연동 API)
+
+---
+
+## HO-020 | 2026-04-06 | P3-02
+
+**완료:** 모바일 클리퍼 PWA 구현 (iOS/Android)
+- `web/public/manifest.json` — PWA 매니페스트 (share_target, 아이콘, shortcuts)
+- `web/public/sw.js` — 서비스 워커 (오프라인 fallback + PWA 설치)
+- `web/public/icons/icon.svg` — SVG 앱 아이콘
+- `web/public/icons/icon-192.png`, `icon-512.png` — PNG 앱 아이콘 (Pillow 생성)
+- `web/components/SwRegister.tsx` — 클라이언트 SW 등록 컴포넌트
+- `web/app/layout.tsx` — PWA 메타 태그 추가 (manifest, theme-color, apple-web-app)
+- `web/app/(clipper)/layout.tsx` — 사이드바 없는 모바일 전용 레이아웃
+- `web/app/(clipper)/clip/page.tsx` — 클리퍼 UI (URL/텍스트 입력, Share Target 파라미터 자동 채우기)
+- `web/app/api/clip/route.ts` — POST /api/clip 엔드포인트 (uv run kb ingest 호출)
+- `.env.example` — KB_CLIP_KEY, KB_PROJECT_DIR 항목 추가
+- `web/app/(main)/layout.tsx` — 사이드바에 "클리퍼" 링크 추가
+
+**결정사항:**
+- **PWA 방식 선택** (React Native 대신): 기존 Next.js 인프라 재사용, 앱스토어 불필요, iOS/Android 동시 지원
+- **Web Share Target API**: manifest.json의 `share_target` → GET 방식으로 `/clip?url=...&title=...&text=...` 수신
+  - Android Chrome: 공유 시트에서 "KB 클리퍼" 선택 → 자동 URL 채우기
+  - iOS Safari: "홈 화면에 추가" 후 공유 시트에서 "KB에 추가" 선택 가능
+- **API 인증**: `KB_CLIP_KEY` 환경변수 설정 시 `X-KB-Key` 헤더 또는 `Authorization: Bearer` 토큰 검증
+  - 설정 안 하면 로컬 네트워크용 오픈 액세스
+- **텍스트 인제스트**: 임시 .md 파일 생성 → `kb ingest <tmpfile>` → 정리 (finally 블록)
+- **URL 인제스트**: `kb ingest <url>` 직접 호출 (spawn 배열 인자 → shell injection 없음)
+- 빌드 확인 완료: `/clip` (Static), `/api/clip` (Dynamic) 정상 생성
+
+**주의:**
+- `uv` 명령이 PATH에 있어야 `/api/clip` 동작 — systemd 서비스의 `Environment` 또는 `ExecStartPre`에서 uv 경로 확인 필요
+- `KB_PROJECT_DIR` 미설정 시 `web/` 의 부모 디렉토리로 자동 추정 (`path.resolve(process.cwd(), "..")`)
+  - Next.js가 `web/` 에서 실행되면 올바르게 동작; 다른 경로면 명시 설정
+- Web Share Target은 HTTPS 또는 localhost에서만 동작 (PWA 보안 정책)
+- iOS 홈 화면 추가 후 Share Extension 연동은 Safari 전용 (Chrome iOS 미지원)
+
+**다음:** P3-03 (조직 단위 지식 관리) 또는 P3-04 (외부 연동 API)
+
+---
+
 ## HO-014 | 2026-04-06 | P2-06 + P2-08
 
 **완료:** Phase 2 마지막 두 태스크 완료 — Phase 2 전체 완료

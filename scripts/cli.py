@@ -700,6 +700,272 @@ def team_status_cmd() -> None:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# org (P3-03: 조직 단위 지식 관리)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+org_app = typer.Typer(name="org", help="조직 단위 지식 관리 (P3-03).")
+app.add_typer(org_app)
+
+org_member_app = typer.Typer(name="member", help="조직 멤버를 관리합니다.")
+org_app.add_typer(org_member_app)
+
+org_team_app = typer.Typer(name="team", help="조직 내 팀을 관리합니다.")
+org_app.add_typer(org_team_app)
+
+
+@org_app.command("init")
+def org_init(
+    org_name: str = typer.Argument(..., help="조직 이름 (예: 'Acme Corp')"),
+    org_wiki: str = typer.Option("wiki/_org", "--wiki", help="조직 공유 위키 경로"),
+) -> None:
+    """조직을 초기화합니다 (config/org.yaml 생성)."""
+    from scripts.org import init_org
+    try:
+        config_path = init_org(org_name=org_name, org_wiki=org_wiki)
+        console.print(
+            Panel(
+                f"[bold green]✓ 조직 초기화 완료[/]\n\n"
+                f"  조직명:    [cyan]{org_name}[/]\n"
+                f"  공유 위키: [dim]{org_wiki}[/]\n"
+                f"  설정 파일: [dim]{config_path}[/]\n\n"
+                "[dim]팀 생성: kb org team create <team-id> <team-name> <shared-raw>[/]",
+                title="[bold]kb org init[/]",
+                expand=False,
+            )
+        )
+    except FileExistsError as e:
+        err_console.print(f"[bold red]오류:[/] {e}")
+        raise typer.Exit(code=1)
+
+
+@org_team_app.command("create")
+def org_team_create(
+    team_id: str = typer.Argument(..., help="팀 ID (예: platform)"),
+    team_name: str = typer.Argument(..., help="팀 표시 이름 (예: 'Platform Team')"),
+    shared_raw: str = typer.Argument(..., help="이 팀의 공유 raw 디렉토리 경로"),
+) -> None:
+    """조직에 팀을 추가합니다."""
+    from scripts.org import create_team
+    try:
+        create_team(team_id=team_id, team_name=team_name, shared_raw=shared_raw)
+        console.print(f"[green]✓ 팀 생성:[/] [cyan]{team_id}[/] ({team_name}) — raw: [dim]{shared_raw}[/]")
+    except (FileNotFoundError, ValueError) as e:
+        err_console.print(f"[bold red]오류:[/] {e}")
+        raise typer.Exit(code=1)
+
+
+@org_team_app.command("list")
+def org_team_list() -> None:
+    """조직 내 팀 목록을 출력합니다."""
+    from scripts.org import list_teams
+    teams = list_teams()
+    if not teams:
+        console.print("[yellow]등록된 팀이 없습니다.[/]")
+        return
+    tbl = Table(title="팀 목록", show_lines=False)
+    tbl.add_column("ID", style="cyan")
+    tbl.add_column("이름")
+    tbl.add_column("공유 raw")
+    tbl.add_column("멤버 수", justify="right")
+    for t in teams:
+        tbl.add_row(t["id"], t.get("name", ""), t.get("shared_raw", ""), str(len(t.get("members", []))))
+    console.print(tbl)
+
+
+@org_member_app.command("add")
+def org_member_add(
+    team_id: str = typer.Argument(..., help="소속 팀 ID"),
+    member_id: str = typer.Argument(..., help="멤버 ID (예: alice)"),
+    role: str = typer.Option("viewer", "--role", "-r", help="역할: admin | editor | viewer"),
+    wiki: Optional[str] = typer.Option(None, "--wiki", "-w", help="개인 위키 경로 (기본: wiki/{member})"),
+) -> None:
+    """팀에 멤버를 추가합니다."""
+    from scripts.org import add_member
+    try:
+        add_member(team_id=team_id, member_id=member_id, role=role, wiki_path=wiki)  # type: ignore[arg-type]
+        console.print(
+            f"[green]✓ 멤버 추가:[/] [cyan]{member_id}[/] → 팀 [cyan]{team_id}[/] "
+            f"(역할: [yellow]{role}[/], wiki: [dim]{wiki or f'wiki/{member_id}'}[/])"
+        )
+    except (FileNotFoundError, ValueError) as e:
+        err_console.print(f"[bold red]오류:[/] {e}")
+        raise typer.Exit(code=1)
+
+
+@org_member_app.command("role")
+def org_member_role(
+    team_id: str = typer.Argument(..., help="소속 팀 ID"),
+    member_id: str = typer.Argument(..., help="멤버 ID"),
+    new_role: str = typer.Argument(..., help="새 역할: admin | editor | viewer"),
+) -> None:
+    """멤버 역할을 변경합니다."""
+    from scripts.org import update_member_role
+    try:
+        update_member_role(team_id=team_id, member_id=member_id, new_role=new_role)  # type: ignore[arg-type]
+        console.print(f"[green]✓ 역할 변경:[/] {member_id} → [yellow]{new_role}[/]")
+    except (FileNotFoundError, ValueError) as e:
+        err_console.print(f"[bold red]오류:[/] {e}")
+        raise typer.Exit(code=1)
+
+
+@org_member_app.command("remove")
+def org_member_remove(
+    team_id: str = typer.Argument(..., help="소속 팀 ID"),
+    member_id: str = typer.Argument(..., help="멤버 ID"),
+) -> None:
+    """팀에서 멤버를 제거합니다."""
+    from scripts.org import remove_member
+    try:
+        remove_member(team_id=team_id, member_id=member_id)
+        console.print(f"[green]✓ 멤버 제거:[/] {member_id} (팀: {team_id})")
+    except (FileNotFoundError, ValueError) as e:
+        err_console.print(f"[bold red]오류:[/] {e}")
+        raise typer.Exit(code=1)
+
+
+@org_member_app.command("list")
+def org_member_list(
+    team: Optional[str] = typer.Option(None, "--team", "-t", help="팀 ID 필터"),
+) -> None:
+    """멤버 목록을 출력합니다."""
+    from scripts.org import list_members
+    members = list_members(team_id=team)
+    if not members:
+        console.print("[yellow]등록된 멤버가 없습니다.[/]")
+        return
+    tbl = Table(title="멤버 목록", show_lines=False)
+    tbl.add_column("멤버 ID", style="cyan")
+    tbl.add_column("팀")
+    tbl.add_column("역할", style="yellow")
+    tbl.add_column("위키 경로")
+    for m in members:
+        tbl.add_row(m["id"], m["team_name"], m["role"], m["wiki"])
+    console.print(tbl)
+
+
+@org_app.command("stats")
+def org_stats_cmd() -> None:
+    """조직 전체 지식베이스 통계를 출력합니다."""
+    from scripts.org import load_org_config, org_stats
+
+    org_config = load_org_config()
+    if org_config is None:
+        err_console.print(
+            "[bold red]오류:[/] 조직 설정이 없습니다. "
+            "먼저 `kb org init <org-name>` 을 실행하세요."
+        )
+        raise typer.Exit(code=1)
+
+    settings = _load_settings_safe()
+    stats = org_stats(org_config, project_root=_PROJECT_ROOT)
+
+    team_lines = []
+    for t in stats["teams"]:
+        member_lines = []
+        for m in t["members"]:
+            role_color = {"admin": "red", "editor": "yellow", "viewer": "dim"}.get(m["role"], "white")
+            member_lines.append(
+                f"    [cyan]{m['id']}[/] ([{role_color}]{m['role']}[/]) "
+                f"개념 [yellow]{m['concepts']}[/] / 탐색 [yellow]{m['explorations']}[/]"
+            )
+        team_lines.append(
+            f"  [bold]{t['name']}[/] ([dim]{t['id']}[/])\n"
+            f"    raw: [dim]{t['raw_count']}[/]건 | 멤버: [dim]{t['member_count']}[/]명\n"
+            + "\n".join(member_lines)
+        )
+
+    console.print(
+        Panel(
+            f"[bold]조직:[/] [cyan]{stats['org_name']}[/]  "
+            f"(생성: {stats.get('created_at', '-')})\n\n"
+            f"  팀 수:       [yellow]{len(stats['teams'])}[/]개\n"
+            f"  총 멤버:     [yellow]{stats['total_members']}[/]명\n"
+            f"  총 raw:      [yellow]{stats['total_raw']}[/]건\n"
+            f"  총 개념:     [yellow]{stats['total_concepts']}[/]개\n"
+            f"  조직 위키:   [dim]{stats['org_wiki']}[/] "
+            f"([yellow]{stats['org_wiki_concepts']}[/]개 개념)\n\n"
+            + "\n\n".join(team_lines),
+            title="[bold]kb org stats[/]",
+            expand=False,
+        )
+    )
+
+
+@org_app.command("log")
+def org_log(
+    limit: int = typer.Option(20, "--limit", "-n", help="출력할 최대 건수"),
+    member: Optional[str] = typer.Option(None, "--member", "-m", help="멤버 ID 필터"),
+    team: Optional[str] = typer.Option(None, "--team", "-t", help="팀 ID 필터"),
+) -> None:
+    """최근 조직 활동 로그를 출력합니다."""
+    from scripts.org import get_activity_log
+
+    entries = get_activity_log(limit=limit, member_id=member, team_id=team)
+    if not entries:
+        console.print("[yellow]활동 기록이 없습니다.[/]")
+        return
+
+    tbl = Table(title=f"최근 활동 (최대 {limit}건)", show_lines=False)
+    tbl.add_column("시각", style="dim", min_width=20)
+    tbl.add_column("멤버", style="cyan")
+    tbl.add_column("팀")
+    tbl.add_column("작업", style="yellow")
+    tbl.add_column("상세")
+    for e in entries:
+        tbl.add_row(
+            e.get("ts", "")[:19].replace("T", " "),
+            e.get("member", ""),
+            e.get("team", ""),
+            e.get("action", ""),
+            e.get("detail", ""),
+        )
+    console.print(tbl)
+
+
+@org_app.command("wiki")
+def org_wiki_compile(
+    team: Optional[str] = typer.Option(None, "--team", "-t", help="특정 팀만 처리 (기본: 전체)"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="캐시 비활성화"),
+) -> None:
+    """각 팀의 개인 위키를 집계해 조직 공유 위키를 컴파일합니다."""
+    from scripts.org import load_org_config, compile_org_wiki, get_org_wiki_dir
+    from scripts.cache import make_cache_from_settings
+
+    org_config = load_org_config()
+    if org_config is None:
+        err_console.print(
+            "[bold red]오류:[/] 조직 설정이 없습니다. "
+            "먼저 `kb org init <org-name>` 을 실행하세요."
+        )
+        raise typer.Exit(code=1)
+
+    settings = _load_settings_safe()
+    cache = None if no_cache else make_cache_from_settings(settings)
+
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as progress:
+        task = progress.add_task("조직 공유 위키 컴파일 중...", total=None)
+        generated = compile_org_wiki(
+            org_config=org_config,
+            settings=settings,
+            team_id=team,
+            project_root=_PROJECT_ROOT,
+            cache=cache,
+        )
+        progress.update(task, completed=True)
+
+    org_wiki = get_org_wiki_dir(org_config, _PROJECT_ROOT)
+    console.print(
+        Panel(
+            f"[bold green]✓ 조직 공유 위키 컴파일 완료[/]\n\n"
+            f"  생성/갱신: [yellow]{len(generated)}[/]개 개념\n"
+            f"  위치:      [dim]{org_wiki}[/]",
+            title="[bold]kb org wiki[/]",
+            expand=False,
+        )
+    )
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # watch (보너스: 파일 감시 + 자동 컴파일)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -741,6 +1007,174 @@ def watch(
         )
     except KeyboardInterrupt:
         console.print("\n[yellow]감시 종료[/]")
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# api (P3-04: 외부 연동 API)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+api_app = typer.Typer(name="api", help="외부 연동 REST API 서버 관리 (P3-04).")
+app.add_typer(api_app)
+
+
+@api_app.command("serve")
+def api_serve(
+    host: str = typer.Option("0.0.0.0", "--host", "-h", help="바인드 호스트 (기본: 0.0.0.0)"),
+    port: int = typer.Option(8000, "--port", "-p", help="포트 번호 (기본: 8000)"),
+    reload: bool = typer.Option(False, "--reload", help="코드 변경 시 자동 재시작 (개발 모드)"),
+) -> None:
+    """외부 연동 API 서버를 시작합니다.
+
+    OpenAPI 문서: http://<host>:<port>/docs
+    """
+    console.print(
+        Panel(
+            f"[bold green]API 서버 시작 중...[/]\n\n"
+            f"  주소:    [cyan]http://{host}:{port}[/]\n"
+            f"  문서:    [cyan]http://{host}:{port}/docs[/]\n"
+            f"  인증:    [yellow]X-API-Key[/] 헤더 또는 [yellow]Authorization: Bearer[/]\n\n"
+            "[dim]KB_API_KEYS_ENABLED=false 로 인증 비활성화 가능 (로컬 전용)[/]\n"
+            "[dim]Ctrl+C 로 종료[/]",
+            title="[bold]kb api serve[/]",
+            expand=False,
+        )
+    )
+    from scripts.api_server import serve as _serve
+    _serve(host=host, port=port, reload=reload)
+
+
+@api_app.command("keygen")
+def api_keygen(
+    name: str = typer.Option("default", "--name", "-n", help="키 이름 (식별용)"),
+) -> None:
+    """새 API 키를 생성합니다.
+
+    생성된 키는 한 번만 표시됩니다. 반드시 안전한 곳에 저장하세요.
+    """
+    from scripts.api_server import generate_api_key
+    result = generate_api_key(name=name)
+    console.print(
+        Panel(
+            f"[bold green]✓ API 키 생성 완료[/]\n\n"
+            f"  이름:   [cyan]{result['name']}[/]\n"
+            f"  접두사: [dim]{result['key_prefix']}...[/]\n\n"
+            f"  [bold yellow]API 키 (한 번만 표시):[/]\n"
+            f"  [bold white]{result['key']}[/]\n\n"
+            "[dim]X-API-Key 헤더 또는 Authorization: Bearer 로 사용하세요.[/]",
+            title="[bold]kb api keygen[/]",
+            expand=False,
+        )
+    )
+
+
+@api_app.command("keys")
+def api_keys() -> None:
+    """등록된 API 키 목록을 출력합니다 (키 자체는 표시 안 됨)."""
+    from scripts.api_server import list_api_keys
+    keys = list_api_keys()
+    if not keys:
+        console.print("[yellow]등록된 API 키가 없습니다. `kb api keygen` 으로 생성하세요.[/]")
+        return
+    tbl = Table(title="API 키 목록", show_lines=False)
+    tbl.add_column("이름", style="cyan")
+    tbl.add_column("접두사")
+    tbl.add_column("생성일", style="dim")
+    tbl.add_column("상태")
+    for k in keys:
+        state = "[green]활성[/]" if k.get("active", True) else "[red]비활성[/]"
+        tbl.add_row(
+            k.get("name", ""),
+            k.get("key_prefix", "") + "...",
+            k.get("created_at", "")[:10],
+            state,
+        )
+    console.print(tbl)
+
+
+@api_app.command("revoke")
+def api_revoke(
+    key_prefix: str = typer.Argument(..., help="폐기할 키의 접두사 (8자리)"),
+) -> None:
+    """API 키를 폐기합니다."""
+    from scripts.api_server import revoke_api_key
+    if revoke_api_key(key_prefix):
+        console.print(f"[green]✓ API 키 폐기:[/] [dim]{key_prefix}...[/]")
+    else:
+        err_console.print(f"[bold red]오류:[/] 접두사 '{key_prefix}' 키를 찾을 수 없습니다.")
+        raise typer.Exit(code=1)
+
+
+@api_app.command("webhooks")
+def api_webhooks() -> None:
+    """등록된 Webhook 목록을 출력합니다."""
+    from scripts.api_server import list_webhooks
+    whs = list_webhooks()
+    if not whs:
+        console.print("[yellow]등록된 Webhook이 없습니다.[/]")
+        return
+    tbl = Table(title="Webhook 목록", show_lines=False)
+    tbl.add_column("ID", style="dim")
+    tbl.add_column("URL", style="cyan")
+    tbl.add_column("이벤트")
+    tbl.add_column("상태")
+    tbl.add_column("생성일", style="dim")
+    for w in whs:
+        state = "[green]활성[/]" if w.get("active", True) else "[red]비활성[/]"
+        tbl.add_row(
+            w.get("id", ""),
+            w.get("url", ""),
+            ", ".join(w.get("events", [])),
+            state,
+            w.get("created_at", "")[:10],
+        )
+    console.print(tbl)
+
+
+@api_app.command("webhook-add")
+def api_webhook_add(
+    url: str = typer.Argument(..., help="Webhook 수신 URL"),
+    events: str = typer.Option(
+        "concept.created,concept.updated",
+        "--events", "-e",
+        help="쉼표 구분 이벤트 목록 (concept.created/updated, ingest.completed, query.completed)",
+    ),
+    secret: str = typer.Option("", "--secret", "-s", help="HMAC 서명용 시크릿 (선택)"),
+) -> None:
+    """Webhook을 등록합니다."""
+    from scripts.api_server import register_webhook, _VALID_EVENTS
+    event_list = [e.strip() for e in events.split(",") if e.strip()]
+    invalid = [e for e in event_list if e not in _VALID_EVENTS]
+    if invalid:
+        err_console.print(
+            f"[bold red]오류:[/] 유효하지 않은 이벤트: {invalid}\n"
+            f"허용: {sorted(_VALID_EVENTS)}"
+        )
+        raise typer.Exit(code=1)
+    result = register_webhook(url=url, events=event_list, secret=secret)
+    console.print(
+        Panel(
+            f"[bold green]✓ Webhook 등록 완료[/]\n\n"
+            f"  ID:     [dim]{result['id']}[/]\n"
+            f"  URL:    [cyan]{result['url']}[/]\n"
+            f"  이벤트: [yellow]{', '.join(result['events'])}[/]\n\n"
+            "[dim]삭제: kb api webhook-del <id>[/]",
+            title="[bold]kb api webhook-add[/]",
+            expand=False,
+        )
+    )
+
+
+@api_app.command("webhook-del")
+def api_webhook_del(
+    webhook_id: str = typer.Argument(..., help="삭제할 Webhook ID"),
+) -> None:
+    """Webhook을 삭제합니다."""
+    from scripts.api_server import delete_webhook
+    if delete_webhook(webhook_id):
+        console.print(f"[green]✓ Webhook 삭제:[/] [dim]{webhook_id}[/]")
+    else:
+        err_console.print(f"[bold red]오류:[/] ID '{webhook_id}' Webhook을 찾을 수 없습니다.")
+        raise typer.Exit(code=1)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

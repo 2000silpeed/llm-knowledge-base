@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Background -->
+  <rect width="512" height="512" rx="96" fill="#1d4ed8"/>
+
+  <!-- Book body -->
+  <rect x="100" y="80" width="280" height="330" rx="20" fill="white"/>
+
+  <!-- Book spine -->
+  <rect x="100" y="80" width="40" height="330" rx="10" fill="#93c5fd"/>
+
+  <!-- Text lines -->
+  <rect x="170" y="155" width="160" height="16" rx="8" fill="#bfdbfe"/>
+  <rect x="170" y="190" width="130" height="14" rx="7" fill="#bfdbfe"/>
+  <rect x="170" y="222" width="145" height="14" rx="7" fill="#bfdbfe"/>
+  <rect x="170" y="254" width="120" height="14" rx="7" fill="#bfdbfe"/>
+  <rect x="170" y="286" width="140" height="14" rx="7" fill="#bfdbfe"/>
+  <rect x="170" y="318" width="110" height="14" rx="7" fill="#bfdbfe"/>
+
+  <!-- Plus / Add badge -->
+  <circle cx="370" cy="380" r="90" fill="#f59e0b"/>
+  <rect x="330" y="365" width="80" height="30" rx="15" fill="white"/>
+  <rect x="355" y="340" width="30" height="80" rx="15" fill="white"/>
+</svg>
