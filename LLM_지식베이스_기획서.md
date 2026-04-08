@@ -423,12 +423,44 @@ Week 11-12: 성능 최적화
 
 ---
 
-### Phase 3 — SaaS (추후)
+### Phase 3 — SaaS ✅ 완료 (2026-04-06)
 
-- 클라우드 호스팅 버전
-- 모바일 클리퍼 앱 (iOS/Android)
-- 팀/조직 단위 지식 관리
-- API 제공 (외부 도구 연동)
+```
+P3-01: 클라우드 배포 인프라
+  - start.sh / stop.sh / Makefile
+  - systemd 서비스 유닛 (웹 UI 자동 시작)
+  - DEPLOY.md (배포 가이드)
+
+P3-02: 모바일 클리퍼 PWA (iOS/Android)
+  - Web Share Target API (공유 시트에서 바로 인제스트)
+  - 서비스 워커 (오프라인 fallback, 홈 화면 추가)
+  - /clip 페이지 (URL/텍스트 입력 UI)
+  - POST /api/clip 엔드포인트
+
+P3-03: 조직 단위 지식 관리
+  - org.yaml 기반 조직/팀/멤버 계층
+  - RBAC 3단계 (admin / editor / viewer)
+  - 활동 로그 (JSONL 실시간 기록)
+  - 조직 공유 위키 컴파일 (팀별 위키 병합)
+  - 조직 대시보드 웹 UI (/org)
+
+P3-04: 외부 연동 REST API
+  - FastAPI 서버 (포트 8000, /v1/*)
+  - API 키 인증 (SHA-256 해시, X-API-Key / Bearer)
+  - Webhook 지원 (4가지 이벤트, HMAC-SHA256 서명)
+  - OpenAPI 자동 문서 (/docs, /redoc)
+  - kb api serve/keygen/keys/revoke/webhooks CLI
+```
+
+**Phase 3 완료 후 추가 개선 (2026-04-08)**
+
+```
+원본 자료 전문 보기 및 편집 (/raw)
+  - 인제스트 파일 목록 (섹션별, 최신순)
+  - 마크다운 에디터 (편집 / 미리보기 / 분할 모드)
+  - PUT /api/raw/[section]/[slug] 저장 API
+  - Ctrl+S 단축키, 메타 정보(.meta.yaml) 표시
+```
 
 ---
 
