@@ -24,6 +24,43 @@ import yaml
 
 from scripts.token_counter import load_settings
 
+# 동적 페이지 판정 임계값 (문자 수 기준)
+_MIN_CONTENT_LENGTH = 200
+
+
+def _fetch_with_playwright(url: str, timeout_ms: int = 30_000) -> str | None:
+    """Playwright 헤드리스 브라우저로 JS 렌더링 후 HTML을 반환합니다.
+
+    Returns:
+        렌더링된 HTML 문자열, 실패 시 None
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        logger.warning("playwright 미설치 — 동적 페이지 fallback 불가")
+        return None
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                )
+            )
+            page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+            # 스크롤로 lazy-load 이미지/콘텐츠 유도
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            page.wait_for_timeout(1000)
+            html = page.content()
+            browser.close()
+            return html
+    except Exception as exc:
+        logger.warning("Playwright 렌더링 실패 (%s): %s", url, exc)
+        return None
+
 logger = logging.getLogger(__name__)
 
 # 이미지 URL 패턴 (마크다운 내)
@@ -152,22 +189,38 @@ def ingest_url(
     articles_dir.mkdir(parents=True, exist_ok=True)
     images_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. HTML 다운로드
+    # 1. HTML 다운로드 (trafilatura → Playwright fallback)
     logger.info("URL 다운로드 중: %s", url)
     downloaded = trafilatura.fetch_url(url)
-    if not downloaded:
-        return {"status": "error", "message": f"URL 다운로드 실패: {url}"}
 
     # 2. 본문 추출 (마크다운)
-    result = trafilatura.extract(
-        downloaded,
-        output_format="markdown",
-        include_images=True,
-        include_links=True,
-        include_tables=True,
-        with_metadata=False,
-        url=url,
-    )
+    def _extract(html: str) -> str | None:
+        return trafilatura.extract(
+            html,
+            output_format="markdown",
+            include_images=True,
+            include_links=True,
+            include_tables=True,
+            with_metadata=False,
+            url=url,
+        )
+
+    result = _extract(downloaded) if downloaded else None
+    used_playwright = False
+
+    # 내용이 없거나 너무 짧으면 Playwright로 재시도
+    if not result or len(result.strip()) < _MIN_CONTENT_LENGTH:
+        logger.info("정적 추출 결과 부족 (%d자) — Playwright로 재시도: %s",
+                    len(result.strip()) if result else 0, url)
+        playwright_html = _fetch_with_playwright(url)
+        if playwright_html:
+            pw_result = _extract(playwright_html)
+            if pw_result and len(pw_result.strip()) > len((result or "").strip()):
+                result = pw_result
+                downloaded = playwright_html  # 메타데이터 추출용
+                used_playwright = True
+                logger.info("Playwright 추출 성공 (%d자)", len(result.strip()))
+
     if not result:
         return {"status": "error", "message": f"본문 추출 실패: {url}"}
 
@@ -203,6 +256,7 @@ def ingest_url(
         "collected_at": collected_at,
         "token_count": token_count,
         "images": saved_images,
+        **({"rendered_with": "playwright"} if used_playwright else {}),
     }
     fm_str = yaml.dump(frontmatter, allow_unicode=True, default_flow_style=False, sort_keys=False)
     document = f"---\n{fm_str}---\n\n# {title}\n\n{content}\n"
@@ -227,4 +281,5 @@ def ingest_url(
         "title": title,
         "token_count": token_count,
         "images": saved_images,
+        "rendered_with": "playwright" if used_playwright else "trafilatura",
     }
