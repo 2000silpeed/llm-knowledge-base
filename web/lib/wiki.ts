@@ -108,6 +108,7 @@ export interface GraphNode {
 export interface GraphEdge {
   source: string;  // slug
   target: string;  // slug
+  relationType?: "parent" | "child" | "related" | "conflict";
 }
 
 export interface GraphData {
@@ -119,6 +120,17 @@ export interface GraphData {
 function extractWikiLinks(content: string): string[] {
   const matches = content.matchAll(/\[\[([^\]|#]+?)(?:\|[^\]]+)?\]\]/g);
   return [...matches].map((m) => m[1].trim().replace(/ /g, "_"));
+}
+
+/** wiki/_graph.json 읽기 (kb graph 명령어로 생성, 없으면 null) */
+function readGraphJson(): { edges: Array<{ source: string; target: string; type: string }> } | null {
+  const graphPath = path.join(WIKI_DIR, "_graph.json");
+  if (!fs.existsSync(graphPath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(graphPath, "utf-8"));
+  } catch {
+    return null;
+  }
 }
 
 export function buildGraphData(): GraphData {
@@ -133,26 +145,61 @@ export function buildGraphData(): GraphData {
   const inDegree: Record<string, number> = {};
   for (const slug of allSlugs) inDegree[slug] = 0;
 
+  // _graph.json에서 타입이 있는 관계 읽기
+  const graphJson = readGraphJson();
+  const typedEdgeMap = new Map<string, GraphEdge["relationType"]>();
+  if (graphJson) {
+    for (const e of graphJson.edges) {
+      if (allSlugs.has(e.source) && allSlugs.has(e.target)) {
+        const key = `${e.source}→${e.target}`;
+        typedEdgeMap.set(key, e.type as GraphEdge["relationType"]);
+      }
+    }
+  }
+
   const edges: GraphEdge[] = [];
 
   for (const file of [...concepts, ...explorations]) {
     const links = extractWikiLinks(file.content);
     for (const target of links) {
       if (allSlugs.has(target) && target !== file.slug) {
-        edges.push({ source: file.slug, target });
+        const key = `${file.slug}→${target}`;
+        edges.push({
+          source: file.slug,
+          target,
+          relationType: typedEdgeMap.get(key),
+        });
         inDegree[target] = (inDegree[target] ?? 0) + 1;
       }
     }
   }
 
-  // 중복 엣지 제거
-  const edgeSet = new Set<string>();
-  const uniqueEdges = edges.filter((e) => {
-    const key = [e.source, e.target].sort().join("→");
-    if (edgeSet.has(key)) return false;
-    edgeSet.add(key);
-    return true;
-  });
+  // _graph.json에만 있는 엣지 추가 (위키링크로 표현 안 된 관계)
+  if (graphJson) {
+    const existingEdgeKeys = new Set(edges.map((e) => `${e.source}→${e.target}`));
+    for (const e of graphJson.edges) {
+      const key = `${e.source}→${e.target}`;
+      if (!existingEdgeKeys.has(key) && allSlugs.has(e.source) && allSlugs.has(e.target)) {
+        edges.push({
+          source: e.source,
+          target: e.target,
+          relationType: e.type as GraphEdge["relationType"],
+        });
+        inDegree[e.target] = (inDegree[e.target] ?? 0) + 1;
+      }
+    }
+  }
+
+  // 중복 엣지 제거 (방향성 무시, 타입 있는 것 우선)
+  const edgeMap = new Map<string, GraphEdge>();
+  for (const e of edges) {
+    const key = [e.source, e.target].sort().join("↔");
+    const existing = edgeMap.get(key);
+    if (!existing || (!existing.relationType && e.relationType)) {
+      edgeMap.set(key, e);
+    }
+  }
+  const uniqueEdges = Array.from(edgeMap.values());
 
   const nodes: GraphNode[] = [
     ...concepts.map((c) => ({

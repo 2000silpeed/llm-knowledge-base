@@ -9,7 +9,15 @@ interface SimNode extends d3.SimulationNodeDatum, GraphNode {}
 interface SimEdge extends d3.SimulationLinkDatum<SimNode> {
   sourceSlug: string;
   targetSlug: string;
+  relationType?: string;
 }
+
+const EDGE_COLORS: Record<string, string> = {
+  parent: "#3b82f6",   // blue — 상위
+  child: "#10b981",    // green — 하위
+  related: "#9ca3af",  // gray — 연관
+  conflict: "#ef4444", // red — 상충
+};
 
 export default function ConceptGraph() {
   const svgRef = useRef<SVGSVGElement>(null);
@@ -66,6 +74,7 @@ export default function ConceptGraph() {
         target: slugToNode.get(e.target) ?? e.target,
         sourceSlug: e.source,
         targetSlug: e.target,
+        relationType: e.relationType,
       }))
       .filter((e) => typeof e.source !== "string" && typeof e.target !== "string");
 
@@ -94,12 +103,13 @@ export default function ConceptGraph() {
     // 엣지
     const link = root
       .append("g")
-      .attr("stroke", "#d1d5db")
       .attr("stroke-opacity", 0.6)
       .selectAll<SVGLineElement, SimEdge>("line")
       .data(edges)
       .join("line")
-      .attr("stroke-width", 1.2);
+      .attr("stroke", (d) => EDGE_COLORS[d.relationType ?? ""] ?? "#d1d5db")
+      .attr("stroke-width", (d) => d.relationType ? 1.6 : 1.2)
+      .attr("stroke-dasharray", (d) => d.relationType === "conflict" ? "4,3" : null);
 
     // 노드 그룹
     const node = root
@@ -196,6 +206,7 @@ export default function ConceptGraph() {
     <div className="relative w-full" style={{ height: "calc(100vh - 160px)" }}>
       {/* 범례 */}
       <div className="absolute top-3 right-3 bg-white/90 border border-gray-200 rounded-lg px-3 py-2 text-xs text-gray-600 space-y-1 z-10">
+        <div className="font-semibold text-gray-700 mb-1">노드</div>
         <div className="flex items-center gap-2">
           <span className="inline-block w-3 h-3 rounded-full bg-blue-500" />
           개념 (concepts)
@@ -203,6 +214,23 @@ export default function ConceptGraph() {
         <div className="flex items-center gap-2">
           <span className="inline-block w-3 h-3 rounded-full bg-violet-500" />
           탐색 (explorations)
+        </div>
+        <div className="font-semibold text-gray-700 mt-2 mb-1">관계 유형</div>
+        <div className="flex items-center gap-2">
+          <span className="inline-block w-5 h-0.5 bg-blue-500" />
+          상위 (parent)
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="inline-block w-5 h-0.5 bg-emerald-500" />
+          하위 (child)
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="inline-block w-5 h-0.5 bg-gray-400" />
+          연관 (related)
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="inline-block w-5 border-t-2 border-dashed border-red-500" />
+          상충 (conflict)
         </div>
         <div className="text-gray-400 mt-1">스크롤: 줌 · 드래그: 이동</div>
       </div>

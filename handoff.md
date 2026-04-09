@@ -5,6 +5,160 @@
 
 ---
 
+## HO-026 | 2026-04-09 | P5-04
+
+**완료:** 개념명 정규화 (P5-04)
+- `scripts/concept_normalizer.py` — 신규 생성
+  - `load_all_concepts(wiki_root)` — wiki/concepts/ 전체 로드 (redirect_to 파일 제외)
+  - `find_duplicate_groups(concepts, settings, prompts, cache)` — LLM으로 유사/중복 그룹 탐지, 배치 처리(>40개) + Union-Find 그룹 병합
+  - `normalize_wiki(wiki_root, ...)` — 전체 파이프라인 진입점
+    - 그룹 내 canonical 파일 결정 (이름 일치 우선, 없으면 내용 가장 많은 파일)
+    - `_merge_concept_files()` — LLM으로 여러 파일 내용 통합
+    - `_write_redirect_file()` — 비정규 파일을 redirect_to frontmatter + [[canonical]] 링크로 전환
+    - `_update_all_backlinks()` — wiki/ 전체 [[old]] → [[canonical]] 교체 (frontmatter YAML 포함)
+    - `_write_report()` — wiki/_normalization_report.md 보고서 저장
+- `config/prompts.yaml` — 프롬프트 2개 추가
+  - `normalize_concepts` — 개념 목록(이름+요약) → JSON [{canonical, members}] (유사 그룹 탐지)
+  - `merge_concept_files` — 여러 파일 내용 → 통합 wiki 항목 생성
+- `scripts/cli.py` — `kb wiki reorg` 명령어 추가
+  - `wiki_app = typer.Typer(name="wiki", ...)` 서브앱 추가
+  - `--dry-run`: 파일 변경 없이 탐지 결과만 출력
+  - `--no-merge`: 리다이렉트만, 내용 병합 없이
+  - `--no-backlinks`: 백링크 업데이트 생략
+  - `--no-cache`: LLM 캐시 비활성화
+
+**결정사항:**
+- **false positive 방지 우선**: LLM 프롬프트에서 확신 없으면 포함 금지 명시 — 잘못된 병합이 정보 손실을 유발하므로
+- **Union-Find 배치 병합**: 배치 경계에서 같은 개념이 다른 그룹에 배정될 경우 겹치는 멤버로 합산
+- **리다이렉트 형식**: frontmatter에 `redirect_to` + `original_name` 필드 → 질의 엔진/인덱서가 식별 가능
+- **백링크 정규식**: `\[\[old_name\]\]` 패턴 + frontmatter YAML `- old_name` 항목도 동시 교체
+- **canonical 파일 결정 순서**: ① 이름이 정확히 canonical인 파일 ② 내용 가장 많은 멤버 파일
+- **병합 없이 리다이렉트만**: `--no-merge`로 내용 병합 없이 리다이렉트 파일만 생성 가능 (빠른 실행)
+
+**주의:**
+- `find_duplicate_groups` LLM 출력의 members 검증 필수 — 존재하지 않는 이름은 자동 드롭됨
+- 배치 처리(>40개) 시 배치 경계 개념 쌍은 별도 비교 안 됨 (첫 배치가 전체 목록 내에서만 비교)
+- `_update_backlinks_in_file` 정규식이 YAML frontmatter의 `-` 목록 항목만 교체 (들여쓰기 없는 형식 가정)
+- canonical 파일명이 현재 파일명과 다를 경우 파일 이동(shutil.move) 발생 — 기존 파일 경로 참조 주의
+- 리다이렉트 파일은 `load_all_concepts()` 호출 시 자동 제외됨 (redirect_to 필드 감지)
+
+**다음:** Phase 5 전체 완료. 다음 단계 기획 필요.
+
+---
+
+## HO-025 | 2026-04-09 | P5-03
+
+**완료:** 개념 관계 맵 자동 생성 (P5-03)
+- `scripts/concept_graph.py` — 신규 생성
+  - `load_all_concepts(wiki_root)` — wiki/concepts/ 전체 로드 (slug, name, summary, path)
+  - `infer_relations(concepts, settings, prompts, cache)` — LLM으로 관계 추론 (JSON 파싱 포함)
+  - `update_concept_files(relations, concepts, dry_run)` — 개념 파일 frontmatter + ## 관련 개념 섹션 갱신
+  - `update_index_graph(relations, concepts, wiki_root, dry_run)` — _index.md 관계 맵 섹션 갱신
+  - `export_graph_json(relations, concepts, wiki_root, dry_run)` — wiki/_graph.json 저장
+  - `build_concept_graph(wiki_root, ...)` — 전체 파이프라인 진입점
+- `config/prompts.yaml` — `infer_concept_relations` 프롬프트 추가
+  - 개념 목록(이름+요약) → JSON 배열 [{source, target, type}]
+- `scripts/cli.py` — `kb graph` 명령어 추가
+  - `--dry-run`: 파일 수정 없이 추론만
+  - `--no-export`: _graph.json 내보내기 생략
+- `web/lib/wiki.ts` — D3.js 연동 강화
+  - `GraphEdge`에 `relationType?: "parent"|"child"|"related"|"conflict"` 추가
+  - `buildGraphData()`에서 `_graph.json` 읽어 타입 정보 병합
+  - 위키링크 엣지와 _graph.json 엣지 통합 (타입 있는 것 우선)
+- `web/components/ConceptGraph.tsx` — 엣지 타입별 시각화
+  - 상위(parent): 파란색, 하위(child): 초록색, 연관(related): 회색, 상충(conflict): 빨간색 점선
+  - 범례 업데이트 (노드 타입 + 관계 유형)
+
+**결정사항:**
+- **관계 추론 단위**: 개념 전체 내용 대신 요약만 LLM에 전달 (토큰 절약)
+  - `## 핵심 요약` 섹션 우선, 없으면 첫 단락 최대 300자
+- **배치 처리**: 개념이 30개 초과 시 30개씩 나눠 처리 (컨텍스트 제한 대응)
+- **역방향 자동 추가**: parent 추론 → child 역방향 자동 생성 (LLM 중복 입력 방지)
+- **_graph.json 우선 전략**: 위키링크 엣지와 _graph.json 엣지 병합 시 타입 정보 있는 것 우선
+- **D3.js 하위 호환**: _graph.json 없어도 기존 위키링크 방식으로 정상 동작 (graceful fallback)
+
+**주의:**
+- `update_concept_files`의 정규식으로 기존 `## 관련 개념` 섹션 교체 시 섹션 끝 패턴(`\n##|\Z`)에 의존
+  - 마지막 섹션이면 `\Z`로 처리되므로 줄바꿈 없는 파일 말단 주의
+- 배치 처리 시 배치 간 관계 추론 안 됨 (배치 경계에 걸린 개념 쌍)
+  - 개념 수가 적으면(≤30) 문제 없음. 30개 초과 시 중요 관계 누락 가능
+- `_graph.json`은 `kb graph` 실행 시마다 전체 재생성 (점진적 갱신 아님)
+
+**다음:** P5-04 (개념명 정규화 — 유사 개념 중복 방지 + 리다이렉트)
+
+---
+
+## HO-024 | 2026-04-09 | P5-02
+
+**완료:** 개념별 컴파일 (2단계 컴파일 파이프라인 Step 2) 구현
+- `scripts/concept_compiler.py` — 신규 생성
+  - `compile_concept(concept, source_path, ...)` — 단일 개념 처리 (신규/병합)
+  - `compile_from_concepts_json(concepts_path, ...)` — JSON 파일 전체 처리
+  - `compile_all_concepts_jsons(concepts_dir, ...)` — .kb_concepts/ 전체 일괄 처리
+- `config/prompts.yaml` — 2개 프롬프트 추가
+  - `compile_concept_new` — 신규 개념 wiki 항목 생성 (null/similar match용)
+  - `compile_concept_merge` — 기존 개념 병합 (exact match용, complement/duplicate/conflict 판정)
+- `scripts/cli.py` — `kb compile-concepts` 명령어 추가
+  - `kb compile-concepts <파일>` — 특정 .concepts.json 처리
+  - `kb compile-concepts --all` — .kb_concepts/ 전체 처리
+  - `--no-index` 옵션으로 인덱스 갱신 생략 가능
+
+**결정사항:**
+- **match_type별 처리 분기:**
+  - `null` / `similar` → `compile_concept_new` 프롬프트로 신규 wiki 생성
+    - `similar`는 기존 유사 개념을 `related_concepts`에 백링크로 포함
+  - `exact` → 기존 wiki 파일 읽어 `compile_concept_merge` 프롬프트 호출
+    - `complement`: LLM이 통합 wiki 반환 → 파일 덮어쓰기
+    - `duplicate`: source_files에 새 출처만 추가 (LLM 없이)
+    - `conflict`: wiki/conflicts/ 에 충돌 보고서 저장 + 기존 wiki에 ⚠️ 알림 삽입
+- **병합 응답 파싱 형식**: JSON 대신 `ACTION:` / `CONFLICT_SUMMARY:` / `---CONTENT---` 줄 구분자 방식 채택 — LLM 파싱 실패 위험 최소화
+- **소스 토큰 초과 처리**: 소스 문서가 예산 60% 초과 시 개념 추출기 요약만 전달 (full doc 대신)
+- **파일 탐색**: 기존 wiki 파일은 파일명(slug 변환) 우선, 없으면 H1 제목으로 순차 검색
+
+**주의:**
+- `compile_concept_merge` 에서 ACTION 줄이 없는 경우 complement 기본값으로 fallback
+- exact match인데 기존 wiki 파일을 못 찾으면 신규 생성으로 자동 전환 (경고 로그)
+- 여러 개념이 같은 기존 wiki 파일(exact match)을 가리킬 경우 순차 처리됨 (race condition 없음)
+- 인덱스 갱신은 각 wiki 파일별로 순차 호출 (update_all) — 개념이 많으면 느릴 수 있음
+
+**다음:** P5-03 (개념 관계 맵 자동 생성 — wiki/_index.md 관계 그래프 섹션)
+
+---
+
+## HO-023 | 2026-04-09 | P5-01
+
+**완료:** 개념 추출 단계 (2단계 컴파일 파이프라인 Step 1) 구현
+- `scripts/concept_extractor.py` — 신규 생성
+  - `extract_concepts(source_path, ...)` — raw/ 문서 → 핵심 개념 5~15개 추출
+  - 단일 패스 (≤80% 토큰) / 청크 분할 (초과) 자동 선택
+  - 기존 `wiki/_index.md` 조회 → `existing_match` / `match_type` 매핑
+  - 결과: `.kb_concepts/{slug}.concepts.json` 저장
+  - `load_concepts(source_path)` — 저장된 JSON 로드 유틸
+- `config/prompts.yaml` — 3개 프롬프트 추가
+  - `extract_concepts` — 단일 패스용 (JSON 배열 출력)
+  - `extract_concepts_chunk` — 청크별 추출용
+  - `extract_concepts_map` — 청크 병합 후 기존 인덱스 매핑용
+- `scripts/cli.py` — `kb extract-concepts <파일>` 명령어 추가
+  - `--no-save`: JSON 저장 생략
+  - `--json`: 결과를 JSON으로 출력
+
+**결정사항:**
+- **출력 포맷**: `{"name", "summary", "existing_match", "match_type"}` 4개 필드
+  - `match_type`: "exact"(동일 개념) / "similar"(유사) / null(신규)
+  - P5-02가 이 정보를 바탕으로 병합/신규 생성 결정
+- **임시 파일 위치**: `.kb_concepts/` — raw/ 불변 원칙 준수, wiki/ 오염 방지
+- **청크 병합 전략**: 청크별 추출 → 이름 기준 dedup → 긴 summary 우선 → 최대 20개 제한 → 인덱스 매핑 LLM 후처리
+- **LLM 파싱 방어**: 코드 펜스 제거 + JSON 배열 정규식 추출 fallback
+
+**주의:**
+- `extract_concepts_map` 프롬프트 사용 시 LLM 파싱 실패 가능성 있음 → fallback으로 원본 concepts 반환
+- `.kb_concepts/` 디렉토리는 `.gitignore` 추가 권장 (임시 파일)
+- P5-02에서 이 JSON을 읽어 `wiki/concepts/{개념명}.md` 생성/병합 진행
+
+**다음:** P5-02 (개념별 컴파일 — 기존 개념 파일 생성/병합)
+
+---
+
 ## HO-022 | 2026-04-06 | P3-04
 
 **완료:** 외부 연동 REST API 서버 구현

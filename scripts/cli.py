@@ -368,6 +368,209 @@ def _print_compile_result(result: dict) -> None:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# extract-concepts  (P5-01)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@app.command(name="extract-concepts")
+def extract_concepts_cmd(
+    file: str = typer.Argument(..., help="개념을 추출할 raw/ 마크다운 파일 경로"),
+    no_save: bool = typer.Option(False, "--no-save", help=".concepts.json 임시 파일 저장 생략"),
+    show_json: bool = typer.Option(False, "--json", help="결과를 JSON으로 출력"),
+) -> None:
+    """raw/ 문서에서 핵심 개념 목록을 추출합니다 (P5-01).
+
+    결과는 .kb_concepts/{slug}.concepts.json 에 저장됩니다.
+    """
+    path = Path(file)
+    if not path.exists():
+        err_console.print(f"[bold red]오류:[/] 파일을 찾을 수 없습니다: {file}")
+        raise typer.Exit(code=1)
+
+    settings = _load_settings_safe()
+
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True, console=console) as p:
+        p.add_task(f"개념 추출 중: {path.name}...", total=None)
+        from scripts.concept_extractor import extract_concepts
+        result = extract_concepts(path, settings=settings, save=not no_save)
+
+    concepts = result["concepts"]
+
+    if show_json:
+        import json as _json
+        console.print(_json.dumps(result, ensure_ascii=False, indent=2))
+        return
+
+    console.print(f"\n[bold green]✓ 개념 추출 완료[/] — {path.name}")
+    console.print(f"  전략: {result['strategy']} | 토큰: {result['token_count']:,}")
+    console.print(f"  추출된 개념: {len(concepts)}개\n")
+
+    for i, concept in enumerate(concepts, 1):
+        match_info = ""
+        if concept.get("existing_match"):
+            tag = "[yellow]유사[/]" if concept["match_type"] == "similar" else "[cyan]동일[/]"
+            match_info = f" → {tag} [[{concept['existing_match']}]]"
+        console.print(f"  [bold]{i:2}.[/] {concept['name']}{match_info}")
+        if concept.get("summary"):
+            console.print(f"      [dim]{concept['summary'][:80]}{'...' if len(concept.get('summary','')) > 80 else ''}[/]")
+
+    if result.get("concepts_path"):
+        console.print(f"\n  저장됨: [dim]{result['concepts_path']}[/]")
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# compile-concepts  (P5-02)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@app.command(name="compile-concepts")
+def compile_concepts_cmd(
+    file: Optional[str] = typer.Argument(None, help=".concepts.json 파일 경로 (--all 사용 시 생략 가능)"),
+    all_files: bool = typer.Option(False, "--all", help=".kb_concepts/ 디렉토리 전체 처리"),
+    no_index: bool = typer.Option(False, "--no-index", help="인덱스 자동 갱신 생략"),
+) -> None:
+    """추출된 개념 목록을 wiki/concepts/에 생성 또는 병합합니다 (P5-02).
+
+    .kb_concepts/{slug}.concepts.json 을 읽어 각 개념별 wiki 항목을
+    신규 생성(null/similar) 또는 기존 항목에 병합(exact)합니다.
+
+    병합 전략:
+      complement — 기존 wiki에 없는 내용 보완
+      duplicate  — source_files에 출처만 추가
+      conflict   — wiki/conflicts/에 충돌 기록
+    """
+    if not file and not all_files:
+        err_console.print("[bold red]오류:[/] 파일 경로 또는 --all 옵션이 필요합니다.")
+        raise typer.Exit(code=1)
+
+    settings = _load_settings_safe()
+
+    if all_files:
+        with Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True, console=console) as p:
+            p.add_task(".kb_concepts/ 전체 컴파일 중...", total=None)
+            from scripts.concept_compiler import compile_all_concepts_jsons
+            results = compile_all_concepts_jsons(settings=settings, update_index=not no_index)
+
+        if not results:
+            console.print("[yellow]처리할 .concepts.json 파일이 없습니다.[/]")
+            return
+
+        total = sum(r["total"] for r in results)
+        created = sum(r["created"] for r in results)
+        complemented = sum(r["complemented"] for r in results)
+        duplicated = sum(r["duplicated"] for r in results)
+        conflicts = sum(r["conflicts"] for r in results)
+
+        console.print(
+            Panel(
+                f"[bold green]✓ 전체 개념 컴파일 완료[/]\n\n"
+                f"  JSON 파일: {len(results)}개\n"
+                f"  총 개념: {total}개\n"
+                f"  신규 생성: [green]{created}[/] | 보완: [cyan]{complemented}[/] | "
+                f"중복: [dim]{duplicated}[/] | 충돌: [yellow]{conflicts}[/]\n"
+                f"  인덱스 갱신: {'예' if any(r['index_updated'] for r in results) else '아니오'}",
+                title="[bold]kb compile-concepts --all[/]",
+                expand=False,
+            )
+        )
+        if conflicts:
+            console.print("  [yellow]충돌 기록:[/] wiki/conflicts/ 확인 필요")
+        return
+
+    # 단일 파일 처리
+    json_path = Path(file)
+    if not json_path.exists():
+        err_console.print(f"[bold red]오류:[/] 파일을 찾을 수 없습니다: {file}")
+        raise typer.Exit(code=1)
+
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True, console=console) as p:
+        p.add_task(f"개념 컴파일 중: {json_path.name}...", total=None)
+        from scripts.concept_compiler import compile_from_concepts_json
+        result = compile_from_concepts_json(json_path, settings=settings, update_index=not no_index)
+
+    console.print(
+        Panel(
+            f"[bold green]✓ 개념 컴파일 완료[/]\n\n"
+            f"  소스: [dim]{result['source_file']}[/]\n"
+            f"  총 개념: {result['total']}개\n"
+            f"  신규 생성: [green]{result['created']}[/] | "
+            f"보완: [cyan]{result['complemented']}[/] | "
+            f"중복: [dim]{result['duplicated']}[/] | "
+            f"충돌: [yellow]{result['conflicts']}[/]\n"
+            f"  인덱스 갱신: {'예' if result['index_updated'] else '아니오'}",
+            title="[bold]kb compile-concepts[/]",
+            expand=False,
+        )
+    )
+
+    if result["conflicts"]:
+        console.print("  [yellow]충돌 기록:[/] wiki/conflicts/ 확인 필요")
+        for cp in result["conflict_paths"]:
+            console.print(f"    [dim]{cp}[/]")
+
+    if result["wiki_paths"]:
+        console.print(f"\n  생성/갱신된 wiki 파일 ({len(result['wiki_paths'])}개):")
+        for wp in result["wiki_paths"]:
+            console.print(f"    [dim]{wp}[/]")
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# graph  (P5-03)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@app.command()
+def graph(
+    dry_run: bool = typer.Option(False, "--dry-run", help="파일 수정 없이 관계 추론만 수행"),
+    no_export: bool = typer.Option(False, "--no-export", help="wiki/_graph.json 내보내기 생략"),
+) -> None:
+    """wiki/concepts/ 개념 간 관계를 추론하여 관계 맵을 자동 생성합니다 (P5-03).
+
+    수행 작업:
+      1. wiki/concepts/ 모든 개념 파일 로드 → 개념 요약 추출
+      2. LLM으로 개념 간 상위/하위/연관/상충 관계 추론
+      3. 각 개념 파일 frontmatter(related_concepts) + ## 관련 개념 섹션 갱신
+      4. wiki/_index.md 개념 관계 맵 섹션 갱신
+      5. wiki/_graph.json 저장 (D3.js 그래프 뷰 연동)
+    """
+    settings = _load_settings_safe()
+
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True, console=console) as p:
+        task_desc = "개념 관계 추론 중..." if not dry_run else "개념 관계 추론 중 (dry-run)..."
+        p.add_task(task_desc, total=None)
+        from scripts.concept_graph import build_concept_graph
+        result = build_concept_graph(
+            settings=settings,
+            dry_run=dry_run,
+            export_json=not no_export,
+        )
+
+    if result["concepts"] < 2:
+        console.print("[yellow]개념 파일이 2개 미만 — 관계 추론 생략[/]")
+        return
+
+    dry_label = " [dim](dry-run)[/]" if dry_run else ""
+    console.print(
+        Panel(
+            f"[bold green]✓ 개념 관계 맵 생성 완료[/]{dry_label}\n\n"
+            f"  분석 개념: [cyan]{result['concepts']}개[/]\n"
+            f"  추론된 관계: [yellow]{result['relations']}개[/]\n"
+            f"  갱신된 파일: [green]{len(result['updated_files'])}개[/]\n"
+            f"  _index.md 갱신: {'예' if result['index_updated'] else '아니오'}\n"
+            f"  _graph.json: {'저장됨' if result['graph_json'] else '생략'}",
+            title="[bold]kb graph[/]",
+            expand=False,
+        )
+    )
+
+    if result["updated_files"]:
+        console.print("\n  갱신된 개념 파일:")
+        for fp in result["updated_files"]:
+            console.print(f"    [dim]{Path(fp).name}[/]")
+
+    if result["graph_json"]:
+        console.print(f"\n  그래프 JSON: [dim]{result['graph_json']}[/]")
+        console.print("  [dim]D3.js 그래프 뷰(/graph)에서 관계 타입별 색상으로 확인하세요.[/]")
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # query
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -1007,6 +1210,90 @@ def watch(
         )
     except KeyboardInterrupt:
         console.print("\n[yellow]감시 종료[/]")
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# wiki (P5-04: 개념명 정규화 / 위키 재구조화)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+wiki_app = typer.Typer(name="wiki", help="위키 유지관리 명령어 (P5-04).")
+app.add_typer(wiki_app)
+
+
+@wiki_app.command("reorg")
+def wiki_reorg(
+    dry_run: bool = typer.Option(False, "--dry-run", help="파일 변경 없이 탐지 결과만 출력"),
+    no_merge: bool = typer.Option(False, "--no-merge", help="비정규 파일 내용을 canonical에 병합하지 않음"),
+    no_backlinks: bool = typer.Option(False, "--no-backlinks", help="백링크 업데이트 생략"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="LLM 캐시 비활성화"),
+) -> None:
+    """wiki/concepts/ 내 유사/중복 개념을 탐지하고 정규화합니다 (P5-04).
+
+    수행 작업:
+      1. wiki/concepts/ 모든 개념 파일 로드 → LLM으로 유사/중복 그룹 탐지
+      2. 그룹 내 canonical(정규) 이름 결정
+      3. 비정규 개념 파일 → 리다이렉트 파일로 전환
+      4. canonical 파일에 병합 내용 반영 (--no-merge 생략 가능)
+      5. 전체 wiki/ 백링크 업데이트 [[old]] → [[canonical]] (--no-backlinks 생략 가능)
+      6. wiki/_normalization_report.md 보고서 저장
+
+    예시:
+      kb wiki reorg --dry-run       # 변경 없이 탐지 결과 확인
+      kb wiki reorg                 # 실제 정규화 적용
+      kb wiki reorg --no-merge      # 리다이렉트만, 내용 병합 없이
+    """
+    settings = _load_settings_safe()
+    _, wiki_dir = _load_team_paths(settings)
+
+    from scripts.cache import make_cache_from_settings
+    cache = None if no_cache else make_cache_from_settings(settings)
+
+    dry_label = " [dim](dry-run)[/]" if dry_run else ""
+    console.print(
+        Panel(
+            f"[bold]wiki/concepts/ 개념명 정규화 시작[/]{dry_label}\n\n"
+            f"  위치: [dim]{wiki_dir}[/]\n"
+            f"  내용 병합: {'아니오' if no_merge else '예'}\n"
+            f"  백링크 갱신: {'아니오' if no_backlinks else '예'}",
+            title="[bold]kb wiki reorg[/]",
+            expand=False,
+        )
+    )
+
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as progress:
+        task = progress.add_task("유사/중복 개념 탐지 중 (LLM)...", total=None)
+        from scripts.concept_normalizer import normalize_wiki
+        result = normalize_wiki(
+            wiki_root=wiki_dir,
+            settings=settings,
+            dry_run=dry_run,
+            merge=not no_merge,
+            update_backlinks=not no_backlinks,
+            cache=cache,
+        )
+        progress.update(task, completed=True)
+
+    if result["groups_found"] == 0:
+        console.print("[green]중복/유사 개념이 발견되지 않았습니다. 위키가 정규화되어 있습니다.[/]")
+        return
+
+    console.print(
+        Panel(
+            f"[bold green]✓ 개념명 정규화 완료[/]{dry_label}\n\n"
+            f"  분석 개념:       [cyan]{result['concepts']}개[/]\n"
+            f"  탐지된 중복 그룹: [yellow]{result['groups_found']}개[/]\n"
+            f"  병합 처리:        [green]{result['merged']}개[/]\n"
+            f"  리다이렉트 생성:  [green]{result['redirects_created']}개[/]\n"
+            f"  백링크 갱신 파일: [green]{result['backlinks_updated']}개[/]\n"
+            f"  보고서:          [dim]{result['report_path']}[/]",
+            title="[bold]kb wiki reorg[/]",
+            expand=False,
+        )
+    )
+
+    if result["report_path"] and not dry_run:
+        console.print(f"\n  [dim]상세 보고서: {result['report_path']}[/]")
+        console.print("  [dim]리다이렉트 파일은 [[canonical]] 링크를 포함합니다.[/]")
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
