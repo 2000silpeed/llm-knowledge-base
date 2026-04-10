@@ -50,8 +50,13 @@ def _fetch_with_playwright(url: str, timeout_ms: int = 30_000) -> str | None:
                     "Chrome/120.0.0.0 Safari/537.36"
                 )
             )
-            # domcontentloaded: networkidle은 WebSocket/폴링 사이트에서 타임아웃됨
-            page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            except Exception as goto_exc:
+                # 타임아웃이어도 이미 로드된 콘텐츠 사용 시도
+                if "timeout" not in str(goto_exc).lower():
+                    raise
+                logger.warning("goto timeout, 부분 로드 콘텐츠 사용: %s", goto_exc)
             # 스크롤로 lazy-load 이미지/콘텐츠 유도 + JS 렌더링 대기
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             page.wait_for_timeout(2000)
