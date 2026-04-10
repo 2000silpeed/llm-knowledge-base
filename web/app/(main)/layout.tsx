@@ -23,6 +23,7 @@ export default function MainLayout({
           <NavLink href="/search">검색</NavLink>
           <hr className="border-gray-100 my-1" />
           <NavLink href="/raw">원본 자료</NavLink>
+          <NavLink href="/upload">업로드</NavLink>
           <NavLink href="/clip">클리퍼</NavLink>
           <NavLink href="/org">조직 관리</NavLink>
         </nav>

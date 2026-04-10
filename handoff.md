@@ -5,6 +5,40 @@
 
 ---
 
+## HO-027 | 2026-04-10 | P4-02
+
+**완료:** 파일 업로드 UI (드래그 앤 드롭)
+- `web/app/api/upload/route.ts` — 신규 생성
+  - POST: `multipart/form-data` 파일 수신 → OS 임시 디렉토리에 저장 → `python -m scripts.cli ingest <temppath>` 실행 → 결과 반환
+  - 지원 확장자: .pdf, .xlsx, .xls, .xlsm, .pptx, .docx, .md, .txt
+  - `KB_PROJECT_ROOT` 환경변수로 프로젝트 루트 오버라이드 가능 (기본값: `../`)
+  - 임시 파일은 요청 완료 후 `finally`에서 자동 삭제
+- `web/app/(main)/upload/page.tsx` — 신규 생성
+  - 드래그 앤 드롭 존 (HTML5 native DnD)
+  - 파일 목록: 파일명/크기/확장자 아이콘 표시
+  - 개별 인제스트 버튼 + 전체 일괄 인제스트 버튼
+  - 업로드 중: 스피너 애니메이션 ("처리 중")
+  - 완료: 저장 경로 표시 + `/raw` 링크 안내
+  - 오류: 오류 메시지 인라인 표시
+- `web/app/(main)/layout.tsx` — 사이드바에 "업로드" 링크 추가
+
+**결정사항:**
+- **개별 + 전체 업로드 분리**: 파일별 개별 인제스트 버튼과 전체 일괄 버튼 공존 — 선택적 처리 가능
+- **순차 처리**: `uploadAll()`은 파일을 순차적으로 하나씩 처리 — LLM 호출 부하 방지
+- **임시 파일 경로**: `os.tmpdir()` 사용, 파일명은 `kb_upload_{timestamp}_{original}` 형식
+- **CLI 경유**: Python 인제스터를 직접 import하지 않고 `python -m scripts.cli ingest`로 실행 — 모든 라우팅 로직 재사용
+- **저장 경로 파싱**: cli.py의 rich Panel 출력에서 "저장: ..." 패턴 정규식 추출
+
+**주의:**
+- `python -m scripts.cli`는 `KB_PROJECT_ROOT`(기본 `../`)에서 실행 — 서버 환경에서 Python venv 활성화 필요할 수 있음
+- `execAsync` timeout 120초 — 대용량 파일 인제스트 시 초과 가능성 있음 (LLM 호출 포함 시)
+- Next.js는 `multipart/form-data` 파일을 `request.formData()`로 처리 — `bodyParser` 비활성화 불필요 (App Router 기본)
+- 동시 다중 업로드 시 임시 파일명 충돌 방지: `Date.now()_Math.random()` prefix 사용
+
+**다음:** 없음 (P4 전체 완료)
+
+---
+
 ## HO-026 | 2026-04-09 | P5-04
 
 **완료:** 개념명 정규화 (P5-04)

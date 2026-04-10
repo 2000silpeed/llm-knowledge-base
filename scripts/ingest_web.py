@@ -50,10 +50,11 @@ def _fetch_with_playwright(url: str, timeout_ms: int = 30_000) -> str | None:
                     "Chrome/120.0.0.0 Safari/537.36"
                 )
             )
-            page.goto(url, wait_until="networkidle", timeout=timeout_ms)
-            # 스크롤로 lazy-load 이미지/콘텐츠 유도
+            # domcontentloaded: networkidle은 WebSocket/폴링 사이트에서 타임아웃됨
+            page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            # 스크롤로 lazy-load 이미지/콘텐츠 유도 + JS 렌더링 대기
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(2000)
             html = page.content()
             browser.close()
             return html
