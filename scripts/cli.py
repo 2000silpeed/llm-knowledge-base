@@ -9,7 +9,9 @@
 
 from __future__ import annotations
 
+import re as _re
 import sys
+import unicodedata as _ud
 from pathlib import Path
 from typing import Optional
 
@@ -39,6 +41,94 @@ err_console = Console(stderr=True, style="bold red")
 
 def _is_url(s: str) -> bool:
     return s.startswith("http://") or s.startswith("https://")
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 중복 인제스트 감지 헬퍼
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def _approx_slug(text: str, max_len: int = 60) -> str:
+    """pdf/office 인제스터와 동일한 슬러그 생성 로직.
+
+    NFKD 정규화 없이 적용 — ingest_pdf.py·ingest_excel.py 등과 일치시킴.
+    (ingest_web.py는 NFKD 후 ASCII 변환 시도가 추가로 있어 별도 처리 불필요)
+    """
+    text = _re.sub(r"[^\w\s가-힣]", "", text, flags=_re.UNICODE)
+    text = _re.sub(r"\s+", "-", text.strip())
+    text = text.lower()
+    text = _re.sub(r"-+", "-", text).strip("-")
+    return text[:max_len] if text else "document"
+
+
+def _find_existing_raw(source: str, settings: dict, is_web_url: bool = False) -> list[Path]:
+    """이미 인제스트된 raw 파일 목록을 반환합니다. 없으면 빈 리스트.
+
+    Args:
+        is_web_url: True이면 일반 웹 URL (YouTube·GitHub 제외).
+                    articles/ 디렉토리를 source_url로 스캔함.
+    """
+    import yaml as _yaml
+
+    raw_base = _PROJECT_ROOT / settings["paths"]["raw"]
+
+    if is_web_url:
+        # 웹 URL: articles/ 에서 frontmatter source_url 일치 파일 탐색
+        articles_dir = raw_base / "articles"
+        if not articles_dir.exists():
+            return []
+        matches: list[Path] = []
+        for md_file in articles_dir.glob("*.md"):
+            try:
+                text = md_file.read_text(encoding="utf-8")
+                if text.startswith("---"):
+                    end = text.find("---", 3)
+                    if end != -1:
+                        data = _yaml.safe_load(text[3:end])
+                        if isinstance(data, dict) and data.get("source_url") == source:
+                            matches.append(md_file)
+            except Exception:
+                pass
+        return matches
+
+    src_path = Path(source)
+    suffix = src_path.suffix.lower()
+
+    if suffix == ".pdf":
+        section = "papers"
+    elif suffix in (".xlsx", ".xls", ".xlsm", ".pptx", ".docx"):
+        section = "office"
+    elif suffix in (".md", ".txt"):
+        # 직접 복사 → raw/articles/{filename}
+        dest = raw_base / "articles" / src_path.name
+        return [dest] if dest.exists() else []
+    else:
+        return []
+
+    slug = _approx_slug(src_path.stem)
+    section_dir = raw_base / section
+    if not section_dir.exists():
+        return []
+
+    # {slug}.md 또는 {slug}_{hash6}.md
+    return list(section_dir.glob(f"{slug}*.md"))
+
+
+def _cleanup_raw_files(md_files: list[Path]) -> None:
+    """기존 인제스트 파일들을 삭제합니다 (md + meta.yaml + concepts.json).
+
+    raw/images/ 하위 이미지는 여러 문서가 공유할 수 있으므로 삭제하지 않음.
+    """
+    for md_path in md_files:
+        if md_path.exists():
+            md_path.unlink()
+        # office 파일용 .meta.yaml
+        meta_path = md_path.with_suffix(".meta.yaml")
+        if meta_path.exists():
+            meta_path.unlink()
+        # .kb_concepts/{stem}.concepts.json
+        concepts_path = _PROJECT_ROOT / ".kb_concepts" / f"{md_path.stem}.concepts.json"
+        if concepts_path.exists():
+            concepts_path.unlink()
 
 
 def _is_youtube_url(s: str) -> bool:
@@ -81,9 +171,37 @@ def _load_team_paths(settings: dict) -> tuple[Path, Path]:
 @app.command()
 def ingest(
     source: str = typer.Argument(..., help="인제스트할 파일 경로 또는 URL"),
+    force: bool = typer.Option(False, "--force", help="이미 등록된 문서도 강제로 재작성"),
+    skip_existing: bool = typer.Option(False, "--skip-existing", help="이미 등록된 문서는 건너뜀"),
 ) -> None:
     """파일 또는 URL을 raw/ 디렉토리에 인제스트합니다."""
     settings = _load_settings_safe()
+
+    # ── 중복 인제스트 감지 ──
+    # YouTube·GitHub는 저장 경로가 달라 articles/ 스캔으로 감지 불가 → 건너뜀
+    is_web_url = _is_url(source) and not _is_youtube_url(source) and not _is_github_url(source)
+    existing_files = _find_existing_raw(source, settings, is_web_url=is_web_url)
+    if existing_files:
+        existing_display = str(existing_files[0].relative_to(_PROJECT_ROOT))
+        if skip_existing:
+            console.print(
+                f"[yellow]이미 등록됨 (건너뜀):[/] [dim]{existing_display}[/]"
+            )
+            raise typer.Exit(0)
+        elif force:
+            console.print(f"[dim]기존 파일 삭제 후 재작성: {existing_display}[/]")
+            _cleanup_raw_files(existing_files)
+        else:
+            console.print(
+                f"\n[bold yellow]⚠ 이미 등록된 문서입니다[/]\n"
+                f"  경로: [dim]{existing_display}[/]"
+            )
+            rewrite = typer.confirm("재작성하시겠습니까? (N 선택 시 건너뜀)")
+            if not rewrite:
+                console.print("[dim]건너뜀[/]")
+                raise typer.Exit(0)
+            _cleanup_raw_files(existing_files)
+            console.print(f"[dim]기존 파일 삭제 완료[/]")
 
     with Progress(
         SpinnerColumn(),

@@ -2,7 +2,7 @@
 
 import { useCallback, useRef, useState } from "react";
 
-type FileStatus = "pending" | "uploading" | "done" | "error";
+type FileStatus = "pending" | "uploading" | "done" | "error" | "duplicate" | "skipped";
 
 interface UploadFile {
   id: string;
@@ -10,6 +10,7 @@ interface UploadFile {
   status: FileStatus;
   savedPath?: string;
   errorMessage?: string;
+  existingPath?: string;  // duplicate 상태일 때 기존 파일 경로
 }
 
 const ACCEPTED_EXT = [".pdf", ".xlsx", ".xls", ".xlsm", ".pptx", ".docx", ".md", ".txt"];
@@ -70,7 +71,8 @@ export default function UploadPage() {
     setFiles((prev) => prev.filter((f) => f.id !== id));
   }
 
-  async function uploadOne(item: UploadFile) {
+  // ── 공통 업로드 요청 ─────────────────────────────────────────────────────
+  async function doUpload(item: UploadFile, force?: "rewrite") {
     setFiles((prev) =>
       prev.map((f) => (f.id === item.id ? { ...f, status: "uploading" } : f))
     );
@@ -78,6 +80,7 @@ export default function UploadPage() {
     try {
       const fd = new FormData();
       fd.append("file", item.file);
+      if (force) fd.append("force", force);
 
       const res = await fetch("/api/upload", { method: "POST", body: fd });
       const data = await res.json();
@@ -87,6 +90,14 @@ export default function UploadPage() {
           prev.map((f) =>
             f.id === item.id
               ? { ...f, status: "done", savedPath: data.saved_path }
+              : f
+          )
+        );
+      } else if (data.status === "duplicate") {
+        setFiles((prev) =>
+          prev.map((f) =>
+            f.id === item.id
+              ? { ...f, status: "duplicate", existingPath: data.existing_path }
               : f
           )
         );
@@ -108,6 +119,25 @@ export default function UploadPage() {
         )
       );
     }
+  }
+
+  function uploadOne(item: UploadFile) {
+    return doUpload(item);
+  }
+
+  function rewriteOne(item: UploadFile) {
+    return doUpload(item, "rewrite");
+  }
+
+  // 건너뜀은 파일 전송 없이 클라이언트에서 직접 처리
+  function skipOne(item: UploadFile) {
+    setFiles((prev) =>
+      prev.map((f) =>
+        f.id === item.id
+          ? { ...f, status: "skipped", savedPath: f.existingPath }
+          : f
+      )
+    );
   }
 
   async function uploadAll() {
@@ -173,41 +203,71 @@ export default function UploadPage() {
       {files.length > 0 && (
         <div className="space-y-3 mb-6">
           {files.map((item) => (
-            <div
-              key={item.id}
-              className="flex items-center gap-3 p-3 bg-white border border-gray-200 rounded-lg"
-            >
-              <FileIcon ext={extOf(item.file.name)} />
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-gray-800 truncate">
-                  {item.file.name}
-                </p>
-                <p className="text-xs text-gray-400">{formatSize(item.file.size)}</p>
-                {item.status === "done" && item.savedPath && (
-                  <p className="text-xs text-green-600 mt-0.5">저장됨: {item.savedPath}</p>
+            <div key={item.id}>
+              <div
+                className="flex items-center gap-3 p-3 bg-white border border-gray-200 rounded-lg"
+              >
+                <FileIcon ext={extOf(item.file.name)} />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-800 truncate">
+                    {item.file.name}
+                  </p>
+                  <p className="text-xs text-gray-400">{formatSize(item.file.size)}</p>
+                  {item.status === "done" && item.savedPath && (
+                    <p className="text-xs text-green-600 mt-0.5">저장됨: {item.savedPath}</p>
+                  )}
+                  {item.status === "skipped" && item.savedPath && (
+                    <p className="text-xs text-gray-500 mt-0.5">건너뜀 (기존: {item.savedPath})</p>
+                  )}
+                  {item.status === "error" && (
+                    <p className="text-xs text-red-500 mt-0.5">{item.errorMessage}</p>
+                  )}
+                </div>
+
+                <StatusBadge status={item.status} />
+
+                {item.status === "pending" && (
+                  <button
+                    onClick={() => uploadOne(item)}
+                    className="text-xs px-3 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                  >
+                    인제스트
+                  </button>
                 )}
-                {item.status === "error" && (
-                  <p className="text-xs text-red-500 mt-0.5">{item.errorMessage}</p>
-                )}
+                <button
+                  onClick={() => removeFile(item.id)}
+                  className="text-xs px-2 py-1 text-gray-400 hover:text-red-500"
+                  disabled={item.status === "uploading"}
+                >
+                  ✕
+                </button>
               </div>
 
-              <StatusBadge status={item.status} />
-
-              {item.status === "pending" && (
-                <button
-                  onClick={() => uploadOne(item)}
-                  className="text-xs px-3 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700"
-                >
-                  인제스트
-                </button>
+              {/* 중복 감지 시 인라인 확인 UI */}
+              {item.status === "duplicate" && (
+                <div className="mt-1 ml-3 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-sm">
+                  <p className="text-yellow-800 font-medium mb-1">
+                    이미 등록된 문서입니다
+                  </p>
+                  <p className="text-yellow-700 text-xs mb-2">
+                    기존 경로: <span className="font-mono">{item.existingPath}</span>
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => rewriteOne(item)}
+                      className="text-xs px-3 py-1 bg-orange-500 text-white rounded-md hover:bg-orange-600"
+                    >
+                      재작성
+                    </button>
+                    <button
+                      onClick={() => skipOne(item)}
+                      className="text-xs px-3 py-1 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300"
+                    >
+                      건너뜀
+                    </button>
+                  </div>
+                </div>
               )}
-              <button
-                onClick={() => removeFile(item.id)}
-                className="text-xs px-2 py-1 text-gray-400 hover:text-red-500"
-                disabled={item.status === "uploading"}
-              >
-                ✕
-              </button>
             </div>
           ))}
         </div>
@@ -301,6 +361,12 @@ function StatusBadge({ status }: { status: FileStatus }) {
   }
   if (status === "error") {
     return <span className="text-xs text-red-500 font-medium">오류</span>;
+  }
+  if (status === "duplicate") {
+    return <span className="text-xs text-yellow-600 font-medium">중복</span>;
+  }
+  if (status === "skipped") {
+    return <span className="text-xs text-gray-500 font-medium">건너뜀</span>;
   }
   return null;
 }

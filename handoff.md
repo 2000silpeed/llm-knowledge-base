@@ -5,6 +5,41 @@
 
 ---
 
+## HO-028 | 2026-04-16 | 중복 인제스트 감지
+
+**완료:** 동일 문서 재요청 시 중복 감지 → 재작성/건너뜀 선택 기능
+- `scripts/cli.py` — 중복 감지 헬퍼 추가
+  - `_approx_slug()` — 인제스터 슬러그 로직 근사 구현
+  - `_find_existing_raw(source, settings, is_url)` — 파일/URL 별 기존 raw 파일 탐색
+    - 파일: `raw/{section}/{slug}*.md` glob 매칭
+    - URL: `raw/articles/*.md` frontmatter `source_url` 스캔
+  - `_cleanup_raw_files(md_files)` — `.md` + `.meta.yaml` + `.concepts.json` 일괄 삭제
+  - `ingest` 커맨드에 `--force`, `--skip-existing` 플래그 추가
+  - 플래그 없을 때 `typer.confirm()` 대화형 확인 프롬프트
+- `web/app/api/upload/route.ts` — 웹 업로드 중복 처리
+  - `findExistingRaw(filename)` — TS 측 기존 파일 탐색 (slugify 동일 로직)
+  - `cleanupExistingRaw(mdPath)` — 기존 raw 파일 정리
+  - `force` form field 처리: `rewrite` | `skip` | 미지정(→ `duplicate` 응답)
+  - 임시 파일명을 원본 파일명 기반으로 변경 (Python 인제스터 출력 경로 정확도 향상)
+  - 임시 디렉토리(`mkdtemp`) 방식으로 전환
+- `web/app/(main)/upload/page.tsx` — 중복 확인 UI
+  - `FileStatus`에 `"duplicate"`, `"skipped"` 상태 추가
+  - `duplicate` 응답 시 인라인 확인 패널 표시 (기존 경로 + 재작성/건너뜀 버튼)
+  - `rewriteOne()`, `skipOne()` 함수 추가
+
+**결정사항:**
+- **TS 측 slug 로직 중복**: Python `_approx_slug`와 동일 로직을 TS에 구현. 완벽히 동일하지 않을 수 있으나 `slug*.md` glob으로 보완 (hash suffix 변형도 탐지)
+- **URL 중복 탐지**: 날짜가 포함된 파일명 대신 frontmatter `source_url` 스캔 방식 채택 — 정확하지만 O(n) 스캔 (개인 KB는 파일 수가 적으므로 허용)
+- **기존 임시 파일 방식 변경**: `mkdtemp` + 원본 파일명 방식으로 변경 — Python 인제스터가 올바른 출력 파일명을 생성할 수 있도록
+
+**주의:**
+- URL 인제스터(YouTube, GitHub)는 중복 감지 미지원 (CLI에서 `_find_existing_raw` is_url=True이지만 YouTube/GitHub URL은 articles/ 스캔 방식과 다를 수 있음)
+- TS slug와 Python slug가 미묘하게 다를 경우 TS 측에서 탐지 못할 수 있음 → 이 경우 CLI에서 `--force` 플래그로 처리 가능
+
+**다음:** 없음 (요청된 기능 완료)
+
+---
+
 ## HO-027 | 2026-04-10 | P4-02
 
 **완료:** 파일 업로드 UI (드래그 앤 드롭)
