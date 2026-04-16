@@ -132,26 +132,106 @@ def _find_wiki_file(concept_name: str, wiki_concepts_dir: Path) -> Path | None:
     return None
 
 
+def _extract_keywords(concept: dict) -> set[str]:
+    """개념 이름과 요약에서 검색용 키워드를 추출합니다."""
+    text = concept.get("name", "") + " " + concept.get("summary", "")
+    # 한글 2자 이상, 영문 3자 이상 단어 추출
+    words = re.findall(r'[가-힣]{2,}|[a-zA-Z]{3,}', text)
+    stopwords = {
+        "이다", "하다", "있다", "되다", "이는", "위한", "통해", "대한",
+        "the", "and", "for", "that", "with", "this", "from",
+    }
+    return {w.lower() for w in words if w.lower() not in stopwords}
+
+
+def _score_chunk(content: str, keywords: set[str]) -> int:
+    """청크 내용과 키워드 집합 사이의 관련도 점수를 반환합니다."""
+    lower = content.lower()
+    return sum(1 for kw in keywords if kw in lower)
+
+
 def _get_source_content(source_path: Path, concept: dict, settings: dict) -> str:
     """소스 문서에서 개념 관련 내용을 반환합니다.
 
-    문서가 토큰 예산 60% 이하면 전체 반환, 그 이상이면 개념 요약만 반환.
+    전략:
+      - 문서가 충분히 작으면 전체 반환
+      - 문서가 크면 관련 청크만 선택해 반환:
+        1순위: concept["source_chunk_indices"] (추출 시 태깅된 청크)
+        2순위: 인접 청크(맥락 확보)
+        3순위: 키워드 매칭 점수 순 선택
     """
+    from scripts.chunking import chunk_document
+
     raw_text = source_path.read_text(encoding="utf-8")
     token_count = estimate_tokens(raw_text)
     available = get_available_tokens(settings)
+    max_content_tokens = int(available * 0.55)
 
-    if token_count <= int(available * 0.6):
+    if token_count <= max_content_tokens:
         return raw_text
 
     logger.info(
-        "  소스 문서가 너무 깁니다 (%d 토큰 > 예산 60%% %d). 개념 요약만 사용.",
-        token_count, int(available * 0.6),
+        "  소스 문서가 큽니다 (%d 토큰 > 예산 %d). 관련 청크 선택 모드.",
+        token_count, max_content_tokens,
     )
-    return (
-        f"[원문이 너무 길어 개념 추출기가 파악한 요약만 제공합니다]\n\n"
-        f"개념명: {concept['name']}\n"
-        f"요약: {concept['summary']}"
+
+    chunks = chunk_document(raw_text, doc_name=source_path.stem, settings=settings)
+    chunk_map = {c.index: c for c in chunks}
+
+    # ── 1순위: source_chunk_indices (추출 단계 태깅) ──
+    source_indices: list[int] = sorted(set(concept.get("source_chunk_indices") or []))
+
+    if source_indices:
+        # 태깅된 청크 + 인접 청크(맥락용)
+        neighbor_indices = set(source_indices)
+        for idx in source_indices:
+            neighbor_indices.add(idx - 1)
+            neighbor_indices.add(idx + 1)
+
+        primary = [chunk_map[i] for i in source_indices if i in chunk_map]
+        extras = [
+            chunk_map[i] for i in sorted(neighbor_indices)
+            if i in chunk_map and i not in source_indices
+        ]
+        selected = primary[:]
+        used = sum(c.token_count for c in selected)
+        for extra in extras:
+            if used + extra.token_count <= max_content_tokens:
+                selected.append(extra)
+                used += extra.token_count
+        selected.sort(key=lambda c: c.index)
+
+    else:
+        # ── 2순위: 키워드 매칭 ──
+        keywords = _extract_keywords(concept)
+        scored = sorted(
+            chunks,
+            key=lambda c: _score_chunk(c.content, keywords),
+            reverse=True,
+        )
+        selected = []
+        used = 0
+        for chunk in scored:
+            if _score_chunk(chunk.content, keywords) == 0:
+                break
+            if used + chunk.token_count > max_content_tokens:
+                break
+            selected.append(chunk)
+            used += chunk.token_count
+        selected.sort(key=lambda c: c.index)
+
+    if not selected:
+        selected = chunks[:1]
+        logger.warning("  관련 청크 없음 — 첫 번째 청크만 사용합니다.")
+
+    logger.info(
+        "  선택된 청크: %d/%d개 (%d 토큰)",
+        len(selected), len(chunks), sum(c.token_count for c in selected),
+    )
+
+    return "\n\n---\n\n".join(
+        f"[청크 {c.index}/{len(chunks)}: {c.section}]\n\n{c.content}"
+        for c in selected
     )
 
 
@@ -638,6 +718,112 @@ def compile_all_concepts_jsons(
             logger.error("처리 실패 [%s]: %s", jf.name, e)
 
     return results
+
+
+# ──────────────────────────────────────────────
+# P5 통합 파이프라인 (CLI / perf / incremental에서 사용)
+# ──────────────────────────────────────────────
+
+def compile_file(
+    source_path: str | Path,
+    *,
+    settings: dict | None = None,
+    prompts: dict | None = None,
+    wiki_root: Path | None = None,
+    update_index: bool = True,
+    cache=None,
+) -> dict:
+    """P5 파이프라인으로 단일 raw/ 파일을 컴파일합니다.
+
+    Step 1: extract_concepts  → 개념 목록 추출 + .kb_concepts/{stem}.concepts.json 저장
+    Step 2: compile_from_concepts_json → 각 개념별 wiki 항목 생성/병합
+
+    compile.py::compile_document()의 P5 대체 함수.
+    반환 형식은 compile_from_concepts_json()과 동일 + 'strategy', 'concept' 필드 추가
+    (perf.py/incremental.py 하위 호환).
+
+    Returns:
+        {
+            "source_file": str,
+            "total": int,
+            "created": int,
+            "complemented": int,
+            "duplicated": int,
+            "conflicts": int,
+            "wiki_paths": [str, ...],
+            "conflict_paths": [str, ...],
+            "index_updated": bool,
+            # 하위 호환 필드
+            "concept": str,       # 첫 번째 생성/보완된 개념명 (없으면 "")
+            "wiki_path": str,     # 첫 번째 wiki 파일 경로 (없으면 "")
+            "strategy": str,      # "p5_single_pass" | "p5_chunked"
+        }
+    """
+    from scripts.concept_extractor import extract_concepts
+
+    if settings is None:
+        settings = load_settings()
+    if wiki_root is None:
+        wiki_root = _PROJECT_ROOT / settings["paths"]["wiki"]
+    if cache is None:
+        from scripts.cache import make_cache_from_settings
+        cache = make_cache_from_settings(settings)
+
+    source_path = Path(source_path)
+
+    # Step 1: 개념 추출
+    concepts_result = extract_concepts(
+        source_path,
+        settings=settings,
+        prompts=prompts,
+        wiki_root=wiki_root,
+        save=True,
+        cache=cache,
+    )
+
+    strategy = f"p5_{concepts_result.get('strategy', 'single_pass')}"
+    n_concepts = len(concepts_result.get("concepts", []))
+
+    logger.info(
+        "P5 파이프라인 | 파일: %s | 개념 추출: %d개 | 전략: %s",
+        source_path.name, n_concepts, strategy,
+    )
+
+    if n_concepts == 0:
+        logger.warning("개념 추출 결과 없음 — 컴파일 건너뜁니다: %s", source_path.name)
+        return {
+            "source_file": str(source_path),
+            "total": 0,
+            "created": 0,
+            "complemented": 0,
+            "duplicated": 0,
+            "conflicts": 0,
+            "wiki_paths": [],
+            "conflict_paths": [],
+            "index_updated": False,
+            "concept": "",
+            "wiki_path": "",
+            "strategy": strategy,
+        }
+
+    # Step 2: 개념별 wiki 컴파일
+    concepts_path = Path(concepts_result["concepts_path"])
+    result = compile_from_concepts_json(
+        concepts_path,
+        settings=settings,
+        prompts=prompts,
+        wiki_root=wiki_root,
+        update_index=update_index,
+        cache=cache,
+    )
+
+    # 하위 호환 필드
+    wiki_paths = result.get("wiki_paths", [])
+    result["concept"] = Path(wiki_paths[0]).stem.replace("_", " ") if wiki_paths else ""
+    result["wiki_path"] = wiki_paths[0] if wiki_paths else ""
+    result["strategy"] = strategy
+
+    return result
 
 
 # ──────────────────────────────────────────────

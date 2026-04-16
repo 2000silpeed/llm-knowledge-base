@@ -347,18 +347,32 @@ def _compile_single(file_path: str, settings: dict, update_index: bool, max_work
         err_console.print(f"[bold red]오류:[/] 파일을 찾을 수 없습니다: {file_path}")
         raise typer.Exit(code=1)
 
-    console.print(f"[dim]컴파일: {path.name}[/]")
+    console.print(f"[dim]컴파일 (P5): {path.name}[/]")
+
+    # Step 1 — 개념 추출
     with Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True, console=console) as p:
-        p.add_task(f"LLM 컴파일 중: {path.name}...", total=None)
-        from scripts.compile import compile_document
-        result = compile_document(
-            path,
+        p.add_task(f"개념 추출 중: {path.name}...", total=None)
+        from scripts.concept_extractor import extract_concepts
+        concepts_result = extract_concepts(path, settings=settings, save=True)
+
+    n = len(concepts_result.get("concepts", []))
+    if n == 0:
+        console.print("[yellow]추출된 개념 없음 — 컴파일 건너뜁니다.[/]")
+        return
+
+    console.print(f"[dim]추출된 개념 {n}개 → wiki 컴파일 시작[/]")
+
+    # Step 2 — 개념별 wiki 컴파일
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True, console=console) as p:
+        p.add_task(f"wiki 컴파일 중: {n}개 개념...", total=None)
+        from scripts.concept_compiler import compile_from_concepts_json
+        result = compile_from_concepts_json(
+            Path(concepts_result["concepts_path"]),
             settings=settings,
             update_index=update_index,
-            max_workers=max_workers,
         )
 
-    _print_compile_result(result)
+    _print_compile_result_p5(result)
 
 
 def _compile_all(
@@ -472,13 +486,48 @@ def _compile_changed(settings: dict, dry_run: bool, update_index: bool, max_work
 
 
 def _print_compile_result(result: dict) -> None:
+    """구 파이프라인 결과 출력 (하위 호환용)."""
     console.print(
         Panel(
             f"[bold green]✓ 컴파일 완료[/]\n\n"
-            f"  개념: [cyan]{result['concept']}[/]\n"
-            f"  전략: [yellow]{result['strategy']}[/] (청크 {result['chunk_count']}개)\n"
-            f"  저장: [dim]{result['wiki_path']}[/]\n"
+            f"  개념: [cyan]{result.get('concept', '?')}[/]\n"
+            f"  전략: [yellow]{result.get('strategy', '?')}[/]\n"
+            f"  저장: [dim]{result.get('wiki_path', '?')}[/]\n"
             f"  인덱스 갱신: {'예' if result.get('index_updated') else '아니오'}",
+            title="[bold]kb compile[/]",
+            expand=False,
+        )
+    )
+
+
+def _print_compile_result_p5(result: dict) -> None:
+    """P5 파이프라인 결과 출력."""
+    created = result.get("created", 0)
+    complemented = result.get("complemented", 0)
+    duplicated = result.get("duplicated", 0)
+    conflicts = result.get("conflicts", 0)
+    total = result.get("total", 0)
+    wiki_paths = result.get("wiki_paths", [])
+
+    lines = [
+        f"[bold green]✓ 컴파일 완료[/]\n",
+        f"  총 개념: [yellow]{total}[/]",
+        f"  신규 생성: [cyan]{created}[/]",
+        f"  보완/병합: [blue]{complemented}[/]",
+        f"  중복 건너뜀: [dim]{duplicated}[/]",
+    ]
+    if conflicts:
+        lines.append(f"  ⚠ 충돌: [red]{conflicts}[/]")
+    if wiki_paths:
+        lines.append(f"\n  생성된 위키:")
+        for wp in wiki_paths[:8]:
+            lines.append(f"    [dim]{Path(wp).name}[/]")
+        if len(wiki_paths) > 8:
+            lines.append(f"    [dim]... 외 {len(wiki_paths) - 8}개[/]")
+
+    console.print(
+        Panel(
+            "\n".join(lines),
             title="[bold]kb compile[/]",
             expand=False,
         )

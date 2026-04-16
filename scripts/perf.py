@@ -283,27 +283,26 @@ def _compile_one_with_retry(
     inner_workers: int,
     cache=None,
 ) -> dict:
-    """단일 파일 컴파일. rate limit 시 exponential backoff으로 재시도합니다.
+    """단일 파일 컴파일 (P5 파이프라인). rate limit 시 exponential backoff으로 재시도합니다.
 
     Returns:
-        compile_document() 결과 dict
+        compile_file() 결과 dict (concept, wiki_path, strategy 필드 포함)
 
     Raises:
         Exception: 최대 재시도 초과 또는 rate limit 이외의 오류
     """
-    from scripts.compile import compile_document
+    from scripts.concept_compiler import compile_file
 
     delay = _RETRY_BASE
     last_error: Exception | None = None
 
     for attempt in range(1, _RETRY_LIMIT + 1):
         try:
-            return compile_document(
+            return compile_file(
                 source_path,
                 settings=settings,
                 prompts=prompts,
                 wiki_root=wiki_root,
-                max_workers=inner_workers,
                 update_index=False,  # 배치 완료 후 인덱스 일괄 갱신
                 cache=cache,
             )

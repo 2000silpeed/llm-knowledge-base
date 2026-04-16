@@ -151,7 +151,11 @@ def _extract_from_chunks(
     settings: dict,
     cache=None,
 ) -> list[dict]:
-    """문서가 너무 길면 청크별로 개념을 추출하고 병합합니다."""
+    """문서가 너무 길면 청크별로 개념을 추출하고 병합합니다.
+
+    각 개념에 source_chunk_indices 필드를 추가해
+    컴파일 단계에서 관련 청크만 선택적으로 사용할 수 있게 합니다.
+    """
     from scripts.chunking import chunk_document
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -170,7 +174,11 @@ def _extract_from_chunks(
             "chunk_content": chunk.content,
         })
         output = _call_llm(system_prompt, user_prompt, settings, cache=cache)
-        return _parse_concepts_json(output)
+        concepts = _parse_concepts_json(output)
+        # 각 개념에 출처 청크 인덱스 태깅
+        for c in concepts:
+            c["_src_chunk_idx"] = chunk.index
+        return concepts
 
     chunk_results: list[list[dict]] = []
     with ThreadPoolExecutor(max_workers=4) as executor:
@@ -178,15 +186,20 @@ def _extract_from_chunks(
         for future in as_completed(futures):
             chunk_results.append(future.result())
 
-    # 청크 결과 병합 — 같은 개념명 dedup
+    # 청크 결과 병합 — 같은 개념명 dedup, source_chunk_indices 누적
     merged: dict[str, dict] = {}
     for chunk_concepts in chunk_results:
         for concept in chunk_concepts:
             name = concept["name"]
+            src_idx = concept.pop("_src_chunk_idx", None)
             if name not in merged:
-                merged[name] = concept
+                merged[name] = concept.copy()
+                merged[name]["source_chunk_indices"] = [src_idx] if src_idx is not None else []
             else:
-                # 이미 있으면 summary 보완 (더 긴 쪽 유지)
+                # source_chunk_indices 누적
+                if src_idx is not None and src_idx not in merged[name].get("source_chunk_indices", []):
+                    merged[name].setdefault("source_chunk_indices", []).append(src_idx)
+                # summary 보완 (더 긴 쪽 유지)
                 if len(concept.get("summary", "")) > len(merged[name].get("summary", "")):
                     merged[name]["summary"] = concept["summary"]
                 # existing_match 우선 유지
@@ -201,9 +214,16 @@ def _extract_from_chunks(
         all_concepts = all_concepts[:20]
 
     # 병합 결과를 LLM으로 정리 (기존 인덱스 매핑 포함)
+    # _map_to_existing은 source_chunk_indices 필드를 건드리지 않음
     if all_concepts:
         logger.info("  청크 결과 병합 정리 중 (%d개)...", len(all_concepts))
-        all_concepts = _map_to_existing(all_concepts, wiki_index, source_rel, prompts, settings, cache)
+        mapped = _map_to_existing(all_concepts, wiki_index, source_rel, prompts, settings, cache)
+        # _map_to_existing이 source_chunk_indices를 날릴 수 있으므로 복원
+        indices_backup = {c["name"]: c.get("source_chunk_indices", []) for c in all_concepts}
+        for c in mapped:
+            if not c.get("source_chunk_indices"):
+                c["source_chunk_indices"] = indices_backup.get(c["name"], [])
+        all_concepts = mapped
 
     return all_concepts
 
