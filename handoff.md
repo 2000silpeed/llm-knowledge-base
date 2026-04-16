@@ -5,6 +5,38 @@
 
 ---
 
+## HO-029 | 2026-04-17 | 위키 컴파일 파이프라인 재설계
+
+**완료:** 정보 손실 및 단일 개념 생성 문제 해결
+
+- `scripts/concept_extractor.py` — `_extract_from_chunks()`에서 개념별 `source_chunk_indices` 태깅
+  - 각 청크에서 추출된 개념에 `_src_chunk_idx` 임시 필드 추가 후 병합
+  - 동일 개념이 여러 청크에서 추출되면 indices 누적 (`[1, 3]` 등)
+  - `_map_to_existing()` 통과 후에도 indices 보존 (backup & restore)
+- `scripts/concept_compiler.py`
+  - `_get_source_content()` 완전 재작성 — 관련 청크 선택 모드
+    - 문서 ≤ 55% 예산: 전체 반환 (기존과 동일)
+    - 문서 초과: `source_chunk_indices` → 인접 청크 추가 → 키워드 매칭 순 선택
+  - `compile_file()` 통합 함수 추가 — P5 두 단계(extract+compile) 래핑
+    - `compile_document()` 대체 함수, 하위 호환 필드(`concept`, `wiki_path`, `strategy`) 포함
+- `scripts/perf.py` — `_compile_one_with_retry()`: `compile_document` → `compile_file` 교체
+- `scripts/cli.py` — `_compile_single()`: P5 2단계 파이프라인 연결
+  - `_print_compile_result_p5()` 추가: 신규/보완/중복/충돌 건수 표시
+
+**결정사항:**
+- `incremental.py`는 `compile_batch()` → `_compile_one_with_retry()` 체인을 통해 자동으로 P5 적용 (별도 수정 불필요)
+- `source_chunk_indices` 없는 개념(단일 패스 추출 또는 구형 JSON)은 키워드 매칭 fallback으로 처리
+- `compile.py`는 삭제하지 않음 — 하위 호환 및 직접 테스트용으로 유지
+
+**주의:**
+- 기존 `.kb_concepts/*.concepts.json` 파일(구형)에는 `source_chunk_indices` 없음 → 키워드 fallback 경로 사용
+- `_map_to_existing()` LLM 호출 후 concepts JSON이 재파싱되므로 indices 복원 로직 필요 (구현 완료)
+- 청크 분할 결과는 settings.yaml의 chunking 파라미터에 따라 달라짐 — 모델 변경 시 청크 수/크기 변함
+
+**다음:** 실제 문서로 테스트 후 결과 확인 권장
+
+---
+
 ## HO-028 | 2026-04-16 | 중복 인제스트 감지
 
 **완료:** 동일 문서 재요청 시 중복 감지 → 재작성/건너뜀 선택 기능
