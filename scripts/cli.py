@@ -1682,7 +1682,6 @@ def wiki_delete(
         raise typer.Exit(code=1)
 
     if dry_run:
-        from scripts.wiki_delete import find_concepts_by_source
         console.print(
             Panel(
                 f"[bold]삭제 예정 (dry-run)[/]\n\n"

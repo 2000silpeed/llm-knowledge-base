@@ -842,9 +842,6 @@ def retry_vision_pass(
     # frontmatter 갱신
     meta["visual_pass"] = all_done
     fm_str = yaml.dump(meta, allow_unicode=True, default_flow_style=False, sort_keys=False)
-    # 기존 타이틀 줄 보존
-    title_match = re.search(r"^# .+$", body, re.MULTILINE)
-    title_line = title_match.group(0) if title_match else ""
     md_path.write_text(f"---\n{fm_str}---\n\n{body}", encoding="utf-8")
 
     # .meta.yaml 갱신
