@@ -34,10 +34,12 @@ wiki/        ← LLM이 생성·유지 (사람 직접 편집 최소화)
 | 기능 | 설명 |
 |------|------|
 | **다중 소스 인제스트** | 웹, PDF, Excel, PPT, Word, YouTube 자막, GitHub 레포 |
+| **PPT 멀티모달 분석** | LibreOffice 렌더링 → Vision LLM으로 슬라이드 전체 이미지 분석 (차트·다이어그램·강조 항목 포함) |
 | **자동 청킹** | 문서 크기에 따라 단일 패스 / Map-Reduce / 계층 트리 자동 선택 |
 | **증분 컴파일** | 변경된 파일만 선택적 재컴파일 (SHA-256 해시 감시) |
 | **대용량 최적화** | 병렬 처리 + 체크포인트로 1,000건+ 처리 |
 | **API 응답 캐싱** | 동일 입력 재요청 시 LLM API 미호출 → 비용 절감 |
+| **위키 삭제** | raw 파일·wiki 개념 항목 선택 삭제 + 인덱스·백링크 자동 정리 |
 | **웹 UI** | Next.js 기반 위키 브라우저 + 개념 그래프 + 검색 |
 | **공유 기능** | 스탠드얼론 HTML 내보내기 (읽기 전용 공유) |
 | **팀 지식베이스** | 공유 raw/ + 개인 wiki/ 분리 구조 |
@@ -119,6 +121,49 @@ kb ingest <파일/URL>
 
 지원 형식: `.pdf` `.xlsx` `.xls` `.pptx` `.docx` `.md` `.txt` · HTTP URL · YouTube URL · GitHub URL
 
+옵션:
+
+```bash
+kb ingest <파일>                   # 기본 인제스트
+kb ingest <파일> --force           # 이미 등록된 파일도 강제 재작성
+kb ingest <파일> --skip-existing   # 이미 등록된 파일은 건너뜀
+```
+
+---
+
+### `kb remove` (W6-01)
+
+등록된 raw 파일과 연관 wiki 항목을 삭제합니다. `kb ingest`의 역방향 작업입니다.
+
+```bash
+kb remove raw/office/발표자료.md             # raw + wiki 통합 삭제
+kb remove raw/papers/논문.md --wiki-only     # wiki만 삭제, raw 유지
+kb remove https://example.com/article       # URL로 삭제 (articles/ 자동 탐색)
+kb remove raw/office/발표자료.md --dry-run   # 삭제 대상 미리 확인
+kb remove raw/office/발표자료.md --force     # 확인 없이 즉시 삭제
+```
+
+삭제 시 자동 정리:
+- `wiki/concepts/{name}.md`
+- `wiki/_index.md` / `wiki/_summaries.md` 내 항목
+- 다른 개념 파일의 백링크(`related_concepts`, `## 관련 개념` 섹션)
+- `.meta.yaml` / `.kb_concepts/{slug}.concepts.json`
+
+> `raw/images/`의 이미지는 공유 가능성이 있으므로 삭제 제외
+
+---
+
+### `kb wiki delete` (W6-01)
+
+특정 wiki 개념 항목만 삭제합니다. raw 파일은 유지합니다.
+
+```bash
+kb wiki delete 트랜스포머
+kb wiki delete "고객 세분화" --dry-run
+kb wiki delete LLM_지식베이스_시스템 --force
+kb wiki delete 트랜스포머 --no-backlinks    # 백링크 정리 생략
+```
+
 ---
 
 ### `kb compile`
@@ -179,6 +224,24 @@ kb share "개념명" --output ./exports
 
 ---
 
+### `kb retry-vision` (W1-04c)
+
+PPT 인제스트 파일에서 Vision 이미지 분석이 실패한 슬라이드만 선택적으로 재실행합니다.
+
+LibreOffice 미설치 또는 Vision LLM 오류로 `visual_pass: false`인 파일에 사용합니다.
+
+```bash
+kb retry-vision raw/office/발표자료.md               # 누락 슬라이드 자동 탐지
+kb retry-vision raw/office/발표자료.md --dry-run     # 대상 슬라이드 목록 확인
+kb retry-vision raw/office/발표자료.md --slides 3,7,10-12  # 특정 슬라이드만
+kb retry-vision raw/office/발표자료.md --force       # 전체 슬라이드 덮어쓰기
+kb retry-vision raw/office/발표자료.md --pptx /new/path/file.pptx  # PPTX 경로 변경 시
+```
+
+재실행 후 `visual_pass` frontmatter와 `.meta.yaml`이 자동 갱신됩니다.
+
+---
+
 ### `kb watch`
 
 `raw/` 디렉토리를 감시하며 변경 시 자동 컴파일합니다.
@@ -227,12 +290,22 @@ kb team status
 
 ```yaml
 llm:
-  provider: anthropic            # anthropic | ollama
+  provider: anthropic            # anthropic | ollama | openai
   model: claude-sonnet-4-6
   context_limit: 200000
   output_reserved: 8000
   temperature: 0.3
   api_key_env: ANTHROPIC_API_KEY
+
+# PPT Vision 분석용 별도 모델 (선택 — 없으면 llm 설정 그대로 사용)
+vision_llm:
+  provider: ollama
+  model: gemma3:4b
+  base_url: http://localhost:11434
+
+ingest:
+  vision_caption: true           # 임베드 이미지 캡션 생성
+  slide_render: true             # PPT 슬라이드 전체 이미지 Vision 분석 (LibreOffice 필요)
 
 cache:
   enabled: true                  # LLM 응답 캐싱
@@ -249,6 +322,8 @@ paths:
 ```
 
 `llm.provider` + `llm.model` 두 줄만 바꾸면 전체 파이프라인이 다른 모델로 전환됩니다.
+
+> **PPT 멀티모달 분석 비활성화:** `ingest.slide_render: false`로 설정하면 LibreOffice 없이도 텍스트 패스만 실행됩니다.
 
 ### Ollama 로컬 모델로 전환
 
