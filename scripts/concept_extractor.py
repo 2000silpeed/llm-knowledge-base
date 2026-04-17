@@ -149,6 +149,7 @@ def _extract_from_chunks(
     wiki_index: str,
     prompts: dict,
     settings: dict,
+    chunk_workers: int = 4,
     cache=None,
 ) -> list[dict]:
     """문서가 너무 길면 청크별로 개념을 추출하고 병합합니다.
@@ -181,10 +182,14 @@ def _extract_from_chunks(
         return concepts
 
     chunk_results: list[list[dict]] = []
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=chunk_workers) as executor:
         futures = {executor.submit(_extract_chunk, chunk): chunk for chunk in chunks}
         for future in as_completed(futures):
-            chunk_results.append(future.result())
+            try:
+                chunk_results.append(future.result())
+            except Exception as e:
+                logger.warning("청크 개념 추출 실패 (건너뜀): %s", e)
+                chunk_results.append([])
 
     # 청크 결과 병합 — 같은 개념명 dedup, source_chunk_indices 누적
     merged: dict[str, dict] = {}
@@ -214,15 +219,23 @@ def _extract_from_chunks(
         all_concepts = all_concepts[:20]
 
     # 병합 결과를 LLM으로 정리 (기존 인덱스 매핑 포함)
-    # _map_to_existing은 source_chunk_indices 필드를 건드리지 않음
     if all_concepts:
         logger.info("  청크 결과 병합 정리 중 (%d개)...", len(all_concepts))
+        # indices 백업: 이름 정규화 대비 위치(순서) 기반으로도 보관
+        indices_by_name = {c["name"]: c.get("source_chunk_indices", []) for c in all_concepts}
+        indices_by_pos = [c.get("source_chunk_indices", []) for c in all_concepts]
+
         mapped = _map_to_existing(all_concepts, wiki_index, source_rel, prompts, settings, cache)
-        # _map_to_existing이 source_chunk_indices를 날릴 수 있으므로 복원
-        indices_backup = {c["name"]: c.get("source_chunk_indices", []) for c in all_concepts}
-        for c in mapped:
+
+        # LLM이 개념명을 정규화했을 수 있으므로 이름 + 위치 두 가지 방법으로 복원
+        for i, c in enumerate(mapped):
             if not c.get("source_chunk_indices"):
-                c["source_chunk_indices"] = indices_backup.get(c["name"], [])
+                # 1차: 이름 정확 매칭
+                recovered = indices_by_name.get(c["name"])
+                # 2차: 위치 기반 (순서 보존 가정)
+                if not recovered and i < len(indices_by_pos):
+                    recovered = indices_by_pos[i]
+                c["source_chunk_indices"] = recovered or []
         all_concepts = mapped
 
     return all_concepts
@@ -272,6 +285,7 @@ def extract_concepts(
     wiki_root: Path | None = None,
     concepts_dir: Path | None = None,
     save: bool = True,
+    chunk_workers: int = 4,
     cache=None,
 ) -> dict:
     """raw/ 문서 하나에서 핵심 개념 목록을 추출합니다.
@@ -351,7 +365,8 @@ def extract_concepts(
     else:
         # ── 청크 기반: 대용량 문서 ──
         concepts = _extract_from_chunks(
-            raw_text, source_rel, wiki_index, prompts, settings, cache=cache,
+            raw_text, source_rel, wiki_index, prompts, settings,
+            chunk_workers=chunk_workers, cache=cache,
         )
         strategy = "chunked"
 

@@ -182,37 +182,37 @@ def _get_source_content(source_path: Path, concept: dict, settings: dict) -> str
     source_indices: list[int] = sorted(set(concept.get("source_chunk_indices") or []))
 
     if source_indices:
-        # 태깅된 청크 + 인접 청크(맥락용)
-        neighbor_indices = set(source_indices)
+        # 태깅된 청크 + 인접 청크(맥락용) — 예산 내에서 최대한
+        neighbor_candidates = set(source_indices)
         for idx in source_indices:
-            neighbor_indices.add(idx - 1)
-            neighbor_indices.add(idx + 1)
+            neighbor_candidates.add(idx - 1)
+            neighbor_candidates.add(idx + 1)
 
-        primary = [chunk_map[i] for i in source_indices if i in chunk_map]
-        extras = [
-            chunk_map[i] for i in sorted(neighbor_indices)
-            if i in chunk_map and i not in source_indices
-        ]
-        selected = primary[:]
-        used = sum(c.token_count for c in selected)
-        for extra in extras:
-            if used + extra.token_count <= max_content_tokens:
-                selected.append(extra)
-                used += extra.token_count
+        # primary 청크도 예산 초과 여부 체크하며 순서대로 추가
+        all_candidates = sorted(
+            [chunk_map[i] for i in neighbor_candidates if i in chunk_map],
+            key=lambda c: (c.index not in source_indices, c.index),  # primary 우선
+        )
+        selected = []
+        used = 0
+        for chunk in all_candidates:
+            if used + chunk.token_count <= max_content_tokens:
+                selected.append(chunk)
+                used += chunk.token_count
         selected.sort(key=lambda c: c.index)
 
     else:
         # ── 2순위: 키워드 매칭 ──
         keywords = _extract_keywords(concept)
+        # 점수를 한 번만 계산해 재사용
         scored = sorted(
-            chunks,
-            key=lambda c: _score_chunk(c.content, keywords),
-            reverse=True,
+            ((c, _score_chunk(c.content, keywords)) for c in chunks),
+            key=lambda x: -x[1],
         )
         selected = []
         used = 0
-        for chunk in scored:
-            if _score_chunk(chunk.content, keywords) == 0:
+        for chunk, score in scored:
+            if score == 0:
                 break
             if used + chunk.token_count > max_content_tokens:
                 break
@@ -731,6 +731,7 @@ def compile_file(
     prompts: dict | None = None,
     wiki_root: Path | None = None,
     update_index: bool = True,
+    chunk_workers: int = 4,
     cache=None,
 ) -> dict:
     """P5 파이프라인으로 단일 raw/ 파일을 컴파일합니다.
@@ -778,6 +779,7 @@ def compile_file(
         prompts=prompts,
         wiki_root=wiki_root,
         save=True,
+        chunk_workers=chunk_workers,
         cache=cache,
     )
 
@@ -807,7 +809,12 @@ def compile_file(
         }
 
     # Step 2: 개념별 wiki 컴파일
-    concepts_path = Path(concepts_result["concepts_path"])
+    raw_concepts_path = concepts_result.get("concepts_path")
+    if not raw_concepts_path:
+        raise RuntimeError(
+            f"concepts.json 저장 실패 — 디스크 공간 또는 권한을 확인하세요: {source_path}"
+        )
+    concepts_path = Path(raw_concepts_path)
     result = compile_from_concepts_json(
         concepts_path,
         settings=settings,

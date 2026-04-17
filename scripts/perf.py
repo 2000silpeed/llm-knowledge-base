@@ -304,6 +304,7 @@ def _compile_one_with_retry(
                 prompts=prompts,
                 wiki_root=wiki_root,
                 update_index=False,  # 배치 완료 후 인덱스 일괄 갱신
+                chunk_workers=inner_workers,
                 cache=cache,
             )
         except Exception as e:
