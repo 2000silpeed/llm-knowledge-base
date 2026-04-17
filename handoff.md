@@ -5,6 +5,38 @@
 
 ---
 
+## HO-032 | 2026-04-17 | W1-04c — PPT Vision 캡션 재실행 기능
+
+**완료:** `scripts/ingest_ppt.py`에 `retry_vision_pass()` 및 헬퍼 3개 추가 + `kb retry-vision` CLI 명령어
+
+- `_parse_ppt_md(text)` — frontmatter + body 파싱 헬퍼
+- `_find_slides_without_vision(body)` — `### 시각 분석` 섹션이 없는 슬라이드 번호 목록 반환
+- `_inject_visual_analysis(body, slide_num, analysis)` — 기존 분석 교체 또는 슬라이드 끝에 삽입
+  - 기존 `### 시각 분석` 있으면 교체, 없으면 `---` 구분자 앞에 삽입
+- `retry_vision_pass(md_path, *, pptx_path, force, only_slides, dry_run)` — 메인 함수
+  - `force=False` : `visual_pass: true` 파일 건너뜀
+  - `only_slides` : 지정된 슬라이드만, None이면 자동 탐지
+  - 전체 렌더링 후 대상 슬라이드만 Vision 호출 (API 비용 절감)
+  - 완료 후 `visual_pass` frontmatter + `.meta.yaml` 자동 갱신
+- `kb retry-vision <md-파일>` — CLI
+  - `--slides "1,3,5-8"` : 범위 표기법 지원 (예: 5-8 → [5,6,7,8])
+  - `--dry-run` : 대상 슬라이드 목록만 출력
+
+**결정사항:**
+- 슬라이드 렌더링(LibreOffice → PyMuPDF)은 전체 실행, Vision API 호출만 대상 슬라이드로 제한 (LibreOffice는 페이지별 변환 미지원)
+- `_inject_visual_analysis()`: `---` 구분자 보존 로직으로 청크 구조 손상 없이 주입
+- `visual_pass: true`가 되는 조건: 재실행 후 `_find_slides_without_vision(body)`가 빈 리스트일 때
+- 원본 PPTX 없어도 `md_path` frontmatter의 `source_file` 자동 참조
+
+**주의:**
+- LibreOffice가 여전히 필요 (미설치 시 "슬라이드 렌더링 실패" 에러 반환)
+- PPTX 파일이 이동/삭제된 경우 `--pptx <경로>` 옵션으로 새 경로 지정
+- 슬라이드 번호가 실제 PPTX 슬라이드 수를 초과하면 해당 슬라이드 건너뜀
+
+**다음:** 실제 PPT 파일로 `kb retry-vision` 테스트 권장
+
+---
+
 ## HO-031 | 2026-04-17 | W6-01 — 위키 삭제 프로세스
 
 **완료:** `scripts/wiki_delete.py` 신규 작성 + `scripts/cli.py`에 2개 명령어 추가

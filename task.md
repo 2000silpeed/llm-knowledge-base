@@ -243,9 +243,21 @@
 
 - [x] **W6-01** 위키 삭제 프로세스 — 구현 완료
 
+- [x] **W1-04c** PPT Vision 캡션 재실행 기능
+  - `retry_vision_pass(md_path, ...)` 함수 추가 (`scripts/ingest_ppt.py`)
+    - `_parse_ppt_md()` — 기존 .md frontmatter/body 파싱
+    - `_find_slides_without_vision(body)` — 시각 분석 누락 슬라이드 자동 탐지
+    - `_inject_visual_analysis(body, slide_num, analysis)` — 분석 결과 주입/교체
+    - `force=True` : 기존 분석도 덮어씀, `only_slides` : 특정 슬라이드만 지정
+    - `dry_run` : 실제 실행 없이 대상 목록만 반환
+  - `kb retry-vision <md-파일>` CLI 명령어 추가 (`scripts/cli.py`)
+    - `--pptx` : 원본 PPTX 경로 (frontmatter source_file 자동 참조 가능)
+    - `--slides "1,3,5-8"` : 특정 슬라이드만 지정
+    - `--force` / `--dry-run` 지원
+
 ---
 
 **마지막 업데이트:** 2026-04-17
-**현재 단계:** W6-01 완료
+**현재 단계:** W1-04c 완료
 **블로킹 이슈:** 없음
-**다음 태스크:** W6-01 실제 파일로 테스트 권장
+**다음 태스크:** 실제 PPT 파일로 retry-vision 테스트 권장

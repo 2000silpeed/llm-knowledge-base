@@ -433,6 +433,140 @@ def _print_remove_result(result: dict) -> None:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# retry-vision (W1-04c: Vision 캡션 재실행)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@app.command(name="retry-vision")
+def retry_vision(
+    md_file: str = typer.Argument(..., help="재실행할 raw/office/*.md 파일 경로"),
+    pptx: Optional[str] = typer.Option(None, "--pptx", help="원본 PPTX 경로 (frontmatter에서 자동 참조)"),
+    force: bool = typer.Option(False, "--force", "-f", help="visual_pass: true여도 강제 재실행"),
+    slides: Optional[str] = typer.Option(
+        None, "--slides", "-s",
+        help="재실행할 슬라이드 번호 (예: 1,3,5-8). 기본: 분석 없는 슬라이드 자동 탐지",
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="재실행 대상 목록만 출력 (실제 실행 없음)"),
+) -> None:
+    """PPT 인제스트 파일의 Vision 이미지 분석을 재실행합니다.
+
+    \b
+    Vision 분석이 실패한 슬라이드만 선택적으로 재실행합니다.
+    LibreOffice 미설치 또는 Vision LLM 오류로 분석이 누락된 경우 사용하세요.
+
+    \b
+    예시:
+      kb retry-vision raw/office/회사소개.md
+      kb retry-vision raw/office/발표자료.md --slides 3,7,12
+      kb retry-vision raw/office/발표자료.md --force --dry-run
+    """
+    settings = _load_settings_safe()
+
+    md_path = Path(md_file)
+    if not md_path.exists():
+        err_console.print(f"[bold red]오류:[/] 파일을 찾을 수 없습니다: {md_file}")
+        raise typer.Exit(code=1)
+
+    pptx_path = Path(pptx) if pptx else None
+
+    # 슬라이드 번호 파싱 (예: "1,3,5-8" → [1, 3, 5, 6, 7, 8])
+    only_slides: Optional[list[int]] = None
+    if slides:
+        only_slides = []
+        for part in slides.split(","):
+            part = part.strip()
+            if "-" in part:
+                start_s, end_s = part.split("-", 1)
+                try:
+                    only_slides.extend(range(int(start_s), int(end_s) + 1))
+                except ValueError:
+                    err_console.print(f"[bold red]오류:[/] 슬라이드 번호 형식 오류: {part}")
+                    raise typer.Exit(code=1)
+            else:
+                try:
+                    only_slides.append(int(part))
+                except ValueError:
+                    err_console.print(f"[bold red]오류:[/] 슬라이드 번호 형식 오류: {part}")
+                    raise typer.Exit(code=1)
+
+    from scripts.ingest_ppt import retry_vision_pass
+
+    if dry_run:
+        result = retry_vision_pass(
+            md_path,
+            pptx_path=pptx_path,
+            project_root=_PROJECT_ROOT,
+            settings=settings,
+            force=force,
+            only_slides=only_slides,
+            dry_run=True,
+        )
+        target = result.get("target_slides", [])
+        if not target:
+            console.print(
+                f"[green]재실행 대상 없음[/] — "
+                f"{'모든 슬라이드에 시각 분석 존재' if not force else '슬라이드 없음'}"
+            )
+        else:
+            console.print(
+                Panel(
+                    f"[bold]Vision 재실행 예정 (dry-run)[/]\n\n"
+                    f"  파일:       [dim]{md_path}[/]\n"
+                    f"  대상 슬라이드: [yellow]{len(target)}장[/]  →  {target}",
+                    title="[bold]kb retry-vision[/]",
+                    expand=False,
+                )
+            )
+        return
+
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True, console=console) as p:
+        p.add_task(f"Vision 재실행 중: {md_path.name}...", total=None)
+        result = retry_vision_pass(
+            md_path,
+            pptx_path=pptx_path,
+            project_root=_PROJECT_ROOT,
+            settings=settings,
+            force=force,
+            only_slides=only_slides,
+            dry_run=False,
+        )
+
+    if result["status"] == "error":
+        err_console.print(f"[bold red]오류:[/] {result.get('message', '알 수 없는 오류')}")
+        raise typer.Exit(code=1)
+
+    target = result.get("target_slides", [])
+    done = result.get("slides_done", 0)
+    failed = result.get("slides_failed", 0)
+    all_done = result.get("visual_pass", False)
+    msg = result.get("message", "")
+
+    if not target:
+        console.print(f"[dim]{msg or '재실행 대상 없음'}[/]")
+        return
+
+    status_color = "green" if all_done else "yellow"
+    status_label = "전체 완료" if all_done else f"부분 완료 (미완료: {msg})"
+
+    console.print(
+        Panel(
+            f"[bold {status_color}]✓ Vision 재실행 완료[/]\n\n"
+            f"  파일:       [dim]{md_path}[/]\n"
+            f"  대상:       [yellow]{len(target)}장[/]\n"
+            f"  성공:       [green]{done}장[/]\n"
+            + (f"  실패:       [red]{failed}장[/]\n" if failed else "")
+            + f"  visual_pass: [{'green' if all_done else 'yellow'}]{status_label}[/]",
+            title="[bold]kb retry-vision[/]",
+            expand=False,
+        )
+    )
+    if failed:
+        console.print(
+            "[dim]실패한 슬라이드는 나중에 다시 시도하거나 "
+            "--slides <번호> 로 특정 슬라이드만 재실행하세요.[/]"
+        )
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # compile
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

@@ -612,3 +612,263 @@ def ingest_ppt(
         "images": rel_images,
         "visual_pass": visual_pass_ok,
     }
+
+
+# ──────────────────────────────────────────────
+# Vision 재실행 (W1-04c)
+# ──────────────────────────────────────────────
+
+def _parse_ppt_md(text: str) -> tuple[dict, str]:
+    """인제스트된 PPT .md 파일의 frontmatter와 body를 파싱합니다."""
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            fm_text = text[3:end].strip()
+            body = text[end + 4:].lstrip("\n")
+            try:
+                meta = yaml.safe_load(fm_text) or {}
+            except yaml.YAMLError:
+                meta = {}
+            return meta, body
+    return {}, text
+
+
+def _find_slides_without_vision(body: str) -> list[int]:
+    """body에서 시각 분석이 없거나 비어있는 슬라이드 번호(1-based) 목록 반환."""
+    slide_matches = list(re.finditer(r"^## Slide (\d+)", body, re.MULTILINE))
+    missing: list[int] = []
+
+    for i, match in enumerate(slide_matches):
+        sec_start = match.start()
+        sec_end = slide_matches[i + 1].start() if i + 1 < len(slide_matches) else len(body)
+        section = body[sec_start:sec_end]
+
+        # ### 시각 분석 존재 + 내용 있는지 확인
+        visual_match = re.search(r"### 시각 분석\s*\n\n(\S)", section)
+        if not visual_match:
+            missing.append(int(match.group(1)))
+
+    return missing
+
+
+def _inject_visual_analysis(body: str, slide_num: int, analysis: str) -> str:
+    """body의 특정 슬라이드 섹션에 시각 분석을 주입하거나 교체합니다.
+
+    - 기존 `### 시각 분석` 섹션이 있으면 교체
+    - 없으면 슬라이드 섹션 끝(---구분자 앞)에 추가
+    """
+    all_slides = list(re.finditer(r"^## Slide (\d+)", body, re.MULTILINE))
+    target_idx = next(
+        (i for i, m in enumerate(all_slides) if int(m.group(1)) == slide_num),
+        None,
+    )
+    if target_idx is None:
+        return body
+
+    sec_start = all_slides[target_idx].start()
+    sec_end = all_slides[target_idx + 1].start() if target_idx + 1 < len(all_slides) else len(body)
+    section = body[sec_start:sec_end]
+
+    new_visual = f"\n\n### 시각 분석\n\n{analysis.strip()}"
+
+    existing = re.search(r"\n\n### 시각 분석\n\n", section)
+    if existing:
+        # 기존 분석 끝 위치 탐색: 다음 헤더 또는 --- 구분자
+        after_start = existing.end()
+        after_text = section[after_start:]
+        next_boundary = re.search(r"\n\n(?:#{1,4} |---)", after_text)
+        if next_boundary:
+            cut = after_start + next_boundary.start()
+            new_section = section[:existing.start()] + new_visual + section[cut:]
+        else:
+            # 분석이 섹션 끝까지 이어짐 — trailing 구분자 보존
+            trail = re.search(r"(\n\n---\s*)$", section)
+            if trail:
+                new_section = section[:existing.start()] + new_visual + section[trail.start():]
+            else:
+                new_section = section[:existing.start()] + new_visual
+    else:
+        # 없으면 섹션 끝 --- 앞에 삽입
+        trail = re.search(r"(\n\n---\s*)$", section)
+        if trail:
+            new_section = section[:trail.start()] + new_visual + section[trail.start():]
+        else:
+            new_section = section.rstrip() + new_visual
+
+    return body[:sec_start] + new_section + body[sec_end:]
+
+
+def retry_vision_pass(
+    md_path: str | Path,
+    *,
+    pptx_path: str | Path | None = None,
+    project_root: Path | str | None = None,
+    settings: dict | None = None,
+    force: bool = False,
+    only_slides: list[int] | None = None,
+    dry_run: bool = False,
+) -> dict:
+    """이미 인제스트된 PPT .md 파일에 Vision 이미지 분석을 재실행합니다.
+
+    기본 동작 (force=False):
+      - `visual_pass: true` 파일은 건너뜀
+      - `### 시각 분석`이 없는 슬라이드만 선택적으로 재실행
+
+    Args:
+        md_path:     재실행할 raw/office/{name}.md 파일 경로
+        pptx_path:   원본 PPTX 경로. None이면 frontmatter source_file 자동 참조.
+        project_root: 프로젝트 루트. None이면 스크립트 상위 디렉토리.
+        settings:    설정 dict. None이면 settings.yaml 자동 로드.
+        force:       visual_pass: true여도 강제 재실행
+        only_slides: 재실행할 슬라이드 번호 목록 (1-based). None이면 자동 탐지.
+        dry_run:     실제 실행 없이 대상 슬라이드 목록만 반환.
+
+    Returns:
+        {
+            "status":          "ok" | "error",
+            "md_path":         str,
+            "pptx_path":       str,
+            "target_slides":   list[int],   # 재실행 대상 슬라이드
+            "slides_done":     int,         # 성공한 슬라이드 수
+            "slides_failed":   int,         # Vision 실패 슬라이드 수
+            "visual_pass":     bool,        # 완료 후 전체 분석 여부
+            "message":         str,
+        }
+    """
+    if project_root is None:
+        project_root = Path(__file__).parent.parent
+    project_root = Path(project_root)
+    md_path = Path(md_path)
+
+    if not md_path.exists():
+        return {"status": "error", "message": f"파일 없음: {md_path}"}
+
+    if settings is None:
+        settings = load_settings()
+
+    # frontmatter 파싱
+    text = md_path.read_text(encoding="utf-8")
+    meta, body = _parse_ppt_md(text)
+
+    # visual_pass 체크
+    if meta.get("visual_pass") and not force:
+        return {
+            "status": "ok",
+            "md_path": str(md_path),
+            "pptx_path": str(pptx_path or meta.get("source_file", "")),
+            "target_slides": [],
+            "slides_done": 0,
+            "slides_failed": 0,
+            "visual_pass": True,
+            "message": "이미 시각 분석이 완료된 파일입니다. --force로 강제 재실행하세요.",
+        }
+
+    # 원본 PPTX 경로 확인
+    if pptx_path is None:
+        pptx_path = Path(meta.get("source_file", ""))
+    pptx_path = Path(pptx_path)
+    if not pptx_path.exists():
+        return {
+            "status": "error",
+            "message": (
+                f"원본 PPTX 파일을 찾을 수 없습니다: {pptx_path}\n"
+                "--pptx 옵션으로 경로를 직접 지정하세요."
+            ),
+        }
+
+    # 재실행 대상 슬라이드 결정
+    if only_slides:
+        target_slides = sorted(set(only_slides))
+    elif force:
+        all_slide_nums = [
+            int(m.group(1))
+            for m in re.finditer(r"^## Slide (\d+)", body, re.MULTILINE)
+        ]
+        target_slides = all_slide_nums
+    else:
+        target_slides = _find_slides_without_vision(body)
+
+    result_base: dict = {
+        "status": "ok",
+        "md_path": str(md_path),
+        "pptx_path": str(pptx_path),
+        "target_slides": target_slides,
+        "slides_done": 0,
+        "slides_failed": 0,
+        "visual_pass": bool(meta.get("visual_pass")),
+        "message": "",
+    }
+
+    if not target_slides:
+        result_base["message"] = "재실행할 슬라이드가 없습니다 (모든 슬라이드에 시각 분석 존재)."
+        return result_base
+
+    if dry_run:
+        result_base["message"] = f"재실행 예정 슬라이드: {target_slides}"
+        return result_base
+
+    # 슬라이드 렌더링 (전체 → 필요한 장만 Vision 호출)
+    logger.info("슬라이드 렌더링 시작: %s", pptx_path)
+    try:
+        with tempfile.TemporaryDirectory(prefix="kb_ppt_retry_") as tmp_dir:
+            all_slide_bytes = _render_slides_to_bytes(pptx_path, Path(tmp_dir))
+    except Exception as exc:
+        return {**result_base, "status": "error", "message": f"슬라이드 렌더링 실패: {exc}"}
+
+    logger.info("Vision 분석 시작: 슬라이드 %s", target_slides)
+    slides_done = 0
+    slides_failed = 0
+
+    for slide_num in target_slides:
+        idx = slide_num - 1  # 0-based
+        if idx < 0 or idx >= len(all_slide_bytes):
+            logger.warning("슬라이드 %d: 범위 초과 (총 %d장) — 건너뜀", slide_num, len(all_slide_bytes))
+            slides_failed += 1
+            continue
+
+        analysis = _analyze_slide_image(all_slide_bytes[idx], slide_num, settings)
+        if analysis:
+            body = _inject_visual_analysis(body, slide_num, analysis)
+            slides_done += 1
+            logger.debug("슬라이드 %d 시각 분석 주입 완료", slide_num)
+        else:
+            slides_failed += 1
+            logger.warning("슬라이드 %d 시각 분석 빈 결과 — 건너뜀", slide_num)
+
+    # visual_pass 상태 재계산
+    remaining_missing = _find_slides_without_vision(body)
+    all_done = len(remaining_missing) == 0
+
+    # frontmatter 갱신
+    meta["visual_pass"] = all_done
+    fm_str = yaml.dump(meta, allow_unicode=True, default_flow_style=False, sort_keys=False)
+    # 기존 타이틀 줄 보존
+    title_match = re.search(r"^# .+$", body, re.MULTILINE)
+    title_line = title_match.group(0) if title_match else ""
+    md_path.write_text(f"---\n{fm_str}---\n\n{body}", encoding="utf-8")
+
+    # .meta.yaml 갱신
+    meta_path = md_path.with_suffix(".meta.yaml")
+    if meta_path.exists():
+        try:
+            meta_yaml = yaml.safe_load(meta_path.read_text(encoding="utf-8")) or {}
+            meta_yaml["visual_pass"] = all_done
+            meta_path.write_text(
+                yaml.dump(meta_yaml, allow_unicode=True, default_flow_style=False, sort_keys=False),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            logger.warning("meta.yaml 갱신 실패: %s", exc)
+
+    logger.info(
+        "Vision 재실행 완료 — 성공: %d, 실패: %d, visual_pass: %s",
+        slides_done, slides_failed, all_done,
+    )
+
+    return {
+        **result_base,
+        "slides_done": slides_done,
+        "slides_failed": slides_failed,
+        "visual_pass": all_done,
+        "message": "" if all_done else f"미완료 슬라이드: {remaining_missing}",
+    }
