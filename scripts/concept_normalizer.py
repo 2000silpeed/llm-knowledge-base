@@ -36,7 +36,7 @@ from pathlib import Path
 import yaml
 
 from scripts.llm import call_llm as _call_llm
-from scripts.token_counter import load_settings
+from scripts.token_counter import load_settings, parse_frontmatter
 
 logger = logging.getLogger(__name__)
 
@@ -63,20 +63,6 @@ def _render(template: str, variables: dict) -> str:
         key = m.group(1).strip()
         return str(variables.get(key, m.group(0)))
     return re.sub(r"\{\{\s*(\w+)\s*\}\}", replace, template)
-
-
-def _parse_frontmatter(text: str) -> tuple[dict, str]:
-    if text.startswith("---"):
-        end = text.find("\n---", 3)
-        if end != -1:
-            fm_text = text[3:end].strip()
-            body = text[end + 4:].strip()
-            try:
-                meta = yaml.safe_load(fm_text) or {}
-            except yaml.YAMLError:
-                meta = {}
-            return meta, body
-    return {}, text
 
 
 def _render_frontmatter(meta: dict, body: str) -> str:
@@ -177,7 +163,7 @@ def load_all_concepts(wiki_root: Path) -> list[dict]:
     concepts = []
     for path in sorted(concepts_dir.glob("*.md")):
         text = path.read_text(encoding="utf-8")
-        meta, body = _parse_frontmatter(text)
+        meta, body = parse_frontmatter(text)
 
         # 리다이렉트 파일 건너뜀
         if meta.get("redirect_to"):

@@ -37,6 +37,7 @@ from scripts.token_counter import (
     get_available_tokens,
     get_chunking_strategy,
     load_settings,
+    parse_frontmatter,
 )
 
 logger = logging.getLogger(__name__)
@@ -150,26 +151,6 @@ def _read_wiki_index(wiki_root: Path) -> str:
 # ──────────────────────────────────────────────
 # 소스 파일 메타데이터 파싱
 # ──────────────────────────────────────────────
-
-def _parse_frontmatter(text: str) -> tuple[dict, str]:
-    """마크다운 frontmatter를 파싱합니다.
-
-    Returns:
-        (meta_dict, body_text)
-    """
-    if text.startswith("---"):
-        end = text.find("\n---", 3)
-        if end != -1:
-            fm_text = text[3:end].strip()
-            body = text[end + 4:].strip()
-            try:
-                meta = yaml.safe_load(fm_text) or {}
-            except yaml.YAMLError:
-                meta = {}
-            return meta, body
-
-    return {}, text
-
 
 # ──────────────────────────────────────────────
 # Map-Reduce 내부 함수
@@ -377,7 +358,7 @@ def compile_document(
 
     # ── 1. 소스 읽기 ──
     raw_text = source_path.read_text(encoding="utf-8")
-    meta, body = _parse_frontmatter(raw_text)
+    meta, body = parse_frontmatter(raw_text)
 
     token_count = estimate_tokens(raw_text)
     available = get_available_tokens(settings)

@@ -27,7 +27,7 @@ from pathlib import Path
 import yaml
 
 from scripts.llm import call_llm as _call_llm
-from scripts.token_counter import load_settings
+from scripts.token_counter import load_settings, parse_frontmatter
 
 logger = logging.getLogger(__name__)
 
@@ -65,21 +65,6 @@ def _strip_fence(text: str) -> str:
 # ──────────────────────────────────────────────
 # frontmatter 파싱 / 갱신
 # ──────────────────────────────────────────────
-
-def _parse_frontmatter(text: str) -> tuple[dict, str]:
-    """frontmatter 파싱 → (meta_dict, body_text)."""
-    if text.startswith("---"):
-        end = text.find("\n---", 3)
-        if end != -1:
-            fm_text = text[3:end].strip()
-            body = text[end + 4:].strip()
-            try:
-                meta = yaml.safe_load(fm_text) or {}
-            except yaml.YAMLError:
-                meta = {}
-            return meta, body
-    return {}, text
-
 
 def _update_frontmatter_date(content: str) -> str:
     """last_updated 날짜를 오늘로 갱신합니다."""
@@ -122,7 +107,7 @@ def _concept_to_filename(concept: str) -> str:
 def _extract_concept_name_from_file(path: Path) -> str:
     """wiki 항목 파일에서 H1 개념명을 추출합니다."""
     text = path.read_text(encoding="utf-8")
-    _, body = _parse_frontmatter(text)
+    _, body = parse_frontmatter(text)
     h1 = re.search(r"^#\s+(.+)", body, re.MULTILINE)
     return h1.group(1).strip() if h1 else path.stem
 

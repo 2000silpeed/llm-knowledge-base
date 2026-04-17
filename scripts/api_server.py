@@ -234,20 +234,8 @@ def _get_wiki_dir(settings: dict) -> Path:
 
 
 def _parse_frontmatter(text: str) -> tuple[dict, str]:
-    """마크다운 frontmatter 파싱 → (meta_dict, body)."""
-    if not text.startswith("---"):
-        return {}, text
-    lines = text.splitlines()
-    end = next((i for i, l in enumerate(lines[1:], 1) if l.strip() == "---"), None)
-    if end is None:
-        return {}, text
-    fm_text = "\n".join(lines[1:end])
-    body = "\n".join(lines[end + 1:]).lstrip()
-    try:
-        meta = yaml.safe_load(fm_text) or {}
-    except Exception:
-        meta = {}
-    return meta, body
+    from scripts.token_counter import parse_frontmatter
+    return parse_frontmatter(text)
 
 
 def _concept_summary(path: Path) -> dict:

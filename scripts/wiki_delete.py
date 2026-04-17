@@ -21,34 +21,11 @@ from typing import Optional
 
 import yaml
 
+from scripts.token_counter import dump_frontmatter, parse_frontmatter
+
 logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).parent.parent
-
-
-# ──────────────────────────────────────────────
-# frontmatter 유틸
-# ──────────────────────────────────────────────
-
-def _parse_frontmatter(text: str) -> tuple[dict, str]:
-    """frontmatter 파싱 → (meta_dict, body_text)."""
-    if text.startswith("---"):
-        end = text.find("\n---", 3)
-        if end != -1:
-            fm_text = text[3:end].strip()
-            body = text[end + 4:].strip()
-            try:
-                meta = yaml.safe_load(fm_text) or {}
-            except yaml.YAMLError:
-                meta = {}
-            return meta, body
-    return {}, text
-
-
-def _dump_frontmatter(meta: dict, body: str) -> str:
-    """frontmatter + body → 마크다운 문자열."""
-    fm = yaml.dump(meta, allow_unicode=True, default_flow_style=False).strip()
-    return f"---\n{fm}\n---\n\n{body}"
 
 
 # ──────────────────────────────────────────────
@@ -72,7 +49,7 @@ def find_concepts_by_source(raw_path: Path, wiki_root: Path) -> list[Path]:
     for concept_file in concepts_dir.glob("*.md"):
         try:
             text = concept_file.read_text(encoding="utf-8")
-            meta, _ = _parse_frontmatter(text)
+            meta, _ = parse_frontmatter(text)
             source_files = meta.get("source_files", []) or []
             if not isinstance(source_files, list):
                 source_files = [source_files]
@@ -167,10 +144,10 @@ def remove_from_index(concept_name: str, wiki_root: Path) -> bool:
 
     if text != original:
         # frontmatter의 total_concepts 감소
-        meta, body = _parse_frontmatter(text)
+        meta, body = parse_frontmatter(text)
         if "total_concepts" in meta and isinstance(meta["total_concepts"], int):
             meta["total_concepts"] = max(0, meta["total_concepts"] - 1)
-            text = _dump_frontmatter(meta, body)
+            text = dump_frontmatter(meta, body)
 
         index_path.write_text(text, encoding="utf-8")
         logger.debug("_index.md: '%s' 항목 제거", concept_name)
@@ -236,7 +213,7 @@ def clean_backlinks(concept_name: str, wiki_root: Path) -> list[Path]:
                 continue
 
             changed = False
-            meta, body = _parse_frontmatter(text)
+            meta, body = parse_frontmatter(text)
 
             # frontmatter related_concepts 정리
             related = meta.get("related_concepts", []) or []
@@ -256,7 +233,7 @@ def clean_backlinks(concept_name: str, wiki_root: Path) -> list[Path]:
 
             if changed:
                 body = re.sub(r"\n{3,}", "\n\n", body)
-                new_text = _dump_frontmatter(meta, body) if meta else body
+                new_text = dump_frontmatter(meta, body) if meta else body
                 concept_file.write_text(new_text, encoding="utf-8")
                 modified.append(concept_file)
                 logger.debug("%s: '%s' 백링크 정리", concept_file.name, concept_name)

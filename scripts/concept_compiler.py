@@ -49,6 +49,7 @@ from scripts.token_counter import (
     estimate_tokens,
     get_available_tokens,
     load_settings,
+    parse_frontmatter,
 )
 
 logger = logging.getLogger(__name__)
@@ -87,20 +88,6 @@ def _strip_fence(text: str) -> str:
     if fence_match:
         return fence_match.group(1).strip()
     return text.strip()
-
-
-def _parse_frontmatter(text: str) -> tuple[dict, str]:
-    if text.startswith("---"):
-        end = text.find("\n---", 3)
-        if end != -1:
-            fm_text = text[3:end].strip()
-            body = text[end + 4:].strip()
-            try:
-                meta = yaml.safe_load(fm_text) or {}
-            except yaml.YAMLError:
-                meta = {}
-            return meta, body
-    return {}, text
 
 
 def _build_frontmatter(meta: dict) -> str:
@@ -341,7 +328,7 @@ def _save_conflict_report(
 
 def _add_conflict_notice(wiki_content: str, conflict_report_path: Path, source_file: str) -> str:
     """기존 wiki 항목 상단에 ⚠️ 충돌 알림 주석을 삽입합니다."""
-    meta, body = _parse_frontmatter(wiki_content)
+    meta, body = parse_frontmatter(wiki_content)
     notice = (
         f"> ⚠️ **충돌 감지됨** — `{source_file}` 과 내용이 상충합니다.\n"
         f"> 충돌 보고: `{conflict_report_path.name}`\n\n"
@@ -351,7 +338,7 @@ def _add_conflict_notice(wiki_content: str, conflict_report_path: Path, source_f
 
 def _update_source_files(wiki_content: str, new_source: str) -> str:
     """기존 wiki frontmatter의 source_files에 새 출처를 추가합니다."""
-    meta, body = _parse_frontmatter(wiki_content)
+    meta, body = parse_frontmatter(wiki_content)
     sources = meta.get("source_files") or []
     if isinstance(sources, str):
         sources = [sources]

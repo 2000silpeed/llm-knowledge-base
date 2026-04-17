@@ -187,3 +187,44 @@ def file_budget_report(path: Path | str, settings: dict | None = None) -> dict:
     report = token_budget_report(token_count, settings)
     report["file"] = str(path)
     return report
+
+
+# ──────────────────────────────────────────────
+# 프론트매터 파싱 유틸리티
+# ──────────────────────────────────────────────
+
+def parse_frontmatter(text: str) -> tuple[dict, str]:
+    """YAML frontmatter를 파싱합니다.
+
+    Args:
+        text: '---\\n...\\n---\\n...' 형식의 마크다운 텍스트
+
+    Returns:
+        (meta_dict, body_text) 튜플.
+        frontmatter가 없으면 ({}, text) 반환.
+    """
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            fm_text = text[3:end].strip()
+            body = text[end + 4:].strip()
+            try:
+                meta = yaml.safe_load(fm_text) or {}
+            except yaml.YAMLError:
+                meta = {}
+            return meta, body
+    return {}, text
+
+
+def dump_frontmatter(meta: dict, body: str) -> str:
+    """frontmatter dict와 body를 마크다운 문자열로 직렬화합니다.
+
+    Args:
+        meta: frontmatter dict
+        body: 본문 텍스트
+
+    Returns:
+        '---\\n{yaml}\\n---\\n\\n{body}' 형식의 문자열
+    """
+    fm = yaml.dump(meta, allow_unicode=True, default_flow_style=False).strip()
+    return f"---\n{fm}\n---\n\n{body}"

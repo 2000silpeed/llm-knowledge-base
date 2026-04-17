@@ -41,7 +41,7 @@ from pathlib import Path
 import yaml
 
 from scripts.llm import call_llm as _call_llm
-from scripts.token_counter import load_settings
+from scripts.token_counter import load_settings, parse_frontmatter
 
 logger = logging.getLogger(__name__)
 
@@ -84,18 +84,7 @@ def _render(template: str, variables: dict) -> str:
     return re.sub(r"\{\{\s*(\w+)\s*\}\}", replace, template)
 
 
-def _parse_frontmatter(text: str) -> tuple[dict, str]:
-    if text.startswith("---"):
-        end = text.find("\n---", 3)
-        if end != -1:
-            fm_text = text[3:end].strip()
-            body = text[end + 4:].strip()
-            try:
-                meta = yaml.safe_load(fm_text) or {}
-            except yaml.YAMLError:
-                meta = {}
-            return meta, body
-    return {}, text
+
 
 
 def _build_frontmatter(meta: dict) -> str:
@@ -104,7 +93,7 @@ def _build_frontmatter(meta: dict) -> str:
 
 def _extract_concept_summary(text: str, max_chars: int = 300) -> str:
     """frontmatter 다음 핵심 요약 섹션 또는 첫 단락을 추출합니다."""
-    _, body = _parse_frontmatter(text)
+    _, body = parse_frontmatter(text)
 
     # ## 핵심 요약 섹션 우선
     summary_match = re.search(r"##\s*핵심\s*요약\s*\n([\s\S]*?)(?=\n##|\Z)", body)
@@ -148,7 +137,7 @@ def load_all_concepts(wiki_root: Path) -> list[dict]:
     result = []
     for md_file in sorted(concepts_dir.glob("*.md")):
         text = md_file.read_text(encoding="utf-8")
-        _, body = _parse_frontmatter(text)
+        _, body = parse_frontmatter(text)
         slug = md_file.stem
 
         # H1에서 개념명 추출
@@ -307,7 +296,7 @@ def update_concept_files(
             continue
 
         text = concept["content"]
-        meta, body = _parse_frontmatter(text)
+        meta, body = parse_frontmatter(text)
 
         # frontmatter related_concepts 갱신 (구조화)
         related_fm: list[dict] = []
@@ -405,7 +394,7 @@ def update_index_graph(
     new_graph_section = "\n".join(graph_lines)
 
     text = index_path.read_text(encoding="utf-8")
-    meta, body = _parse_frontmatter(text)
+    meta, body = parse_frontmatter(text)
 
     # 기존 ## 개념 관계 맵 섹션 교체 또는 추가
     if re.search(r"^##\s*개념\s*관계\s*맵", body, re.MULTILINE):

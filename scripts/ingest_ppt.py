@@ -33,7 +33,7 @@ from pathlib import Path
 
 import yaml
 
-from scripts.token_counter import estimate_tokens, load_settings
+from scripts.token_counter import estimate_tokens, load_settings, parse_frontmatter
 
 logger = logging.getLogger(__name__)
 
@@ -620,17 +620,7 @@ def ingest_ppt(
 
 def _parse_ppt_md(text: str) -> tuple[dict, str]:
     """인제스트된 PPT .md 파일의 frontmatter와 body를 파싱합니다."""
-    if text.startswith("---"):
-        end = text.find("\n---", 3)
-        if end != -1:
-            fm_text = text[3:end].strip()
-            body = text[end + 4:].lstrip("\n")
-            try:
-                meta = yaml.safe_load(fm_text) or {}
-            except yaml.YAMLError:
-                meta = {}
-            return meta, body
-    return {}, text
+    return parse_frontmatter(text)
 
 
 def _find_slides_without_vision(body: str) -> list[int]:
@@ -819,14 +809,37 @@ def retry_vision_pass(
     slides_done = 0
     slides_failed = 0
 
+    # 범위 초과 슬라이드 사전 필터링
+    valid_slides = []
     for slide_num in target_slides:
-        idx = slide_num - 1  # 0-based
+        idx = slide_num - 1
         if idx < 0 or idx >= len(all_slide_bytes):
             logger.warning("슬라이드 %d: 범위 초과 (총 %d장) — 건너뜀", slide_num, len(all_slide_bytes))
             slides_failed += 1
-            continue
+        else:
+            valid_slides.append(slide_num)
 
-        analysis = _analyze_slide_image(all_slide_bytes[idx], slide_num, settings)
+    # Vision 분석 병렬 실행
+    vision_settings = _get_vision_settings(settings)
+    analyses: dict[int, str] = {}
+
+    def _analyze_one(slide_num: int) -> tuple[int, str]:
+        return slide_num, _analyze_slide_image(all_slide_bytes[slide_num - 1], slide_num, vision_settings)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {executor.submit(_analyze_one, sn): sn for sn in valid_slides}
+        for future in as_completed(futures):
+            try:
+                slide_num, analysis = future.result()
+                analyses[slide_num] = analysis
+            except Exception as exc:
+                slide_num = futures[future]
+                logger.warning("슬라이드 %d Vision 분석 예외: %s", slide_num, exc)
+                analyses[slide_num] = ""
+
+    # 결과 주입 (순서 보장을 위해 정렬)
+    for slide_num in sorted(analyses):
+        analysis = analyses[slide_num]
         if analysis:
             body = _inject_visual_analysis(body, slide_num, analysis)
             slides_done += 1

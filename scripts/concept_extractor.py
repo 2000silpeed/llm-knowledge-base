@@ -43,6 +43,7 @@ from scripts.token_counter import (
     get_available_tokens,
     get_chunking_strategy,
     load_settings,
+    parse_frontmatter,
 )
 
 logger = logging.getLogger(__name__)
@@ -75,20 +76,6 @@ def _read_wiki_index(wiki_root: Path) -> str:
     if index_path.exists():
         return index_path.read_text(encoding="utf-8")
     return "(아직 인덱스가 없습니다.)"
-
-
-def _parse_frontmatter(text: str) -> tuple[dict, str]:
-    if text.startswith("---"):
-        end = text.find("\n---", 3)
-        if end != -1:
-            fm_text = text[3:end].strip()
-            body = text[end + 4:].strip()
-            try:
-                meta = yaml.safe_load(fm_text) or {}
-            except yaml.YAMLError:
-                meta = {}
-            return meta, body
-    return {}, text
 
 
 def _parse_concepts_json(llm_output: str) -> list[dict]:

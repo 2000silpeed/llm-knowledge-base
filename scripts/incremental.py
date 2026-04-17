@@ -37,7 +37,7 @@ from pathlib import Path
 import yaml
 
 from scripts.compile import compile_document
-from scripts.token_counter import load_settings
+from scripts.token_counter import load_settings, parse_frontmatter
 
 logger = logging.getLogger(__name__)
 
@@ -188,25 +188,6 @@ def update_file_hash(
 
 
 # ──────────────────────────────────────────────
-# frontmatter 파싱
-# ──────────────────────────────────────────────
-
-def _parse_frontmatter(text: str) -> tuple[dict, str]:
-    """frontmatter 파싱 → (meta_dict, body_text)."""
-    if text.startswith("---"):
-        end = text.find("\n---", 3)
-        if end != -1:
-            fm_text = text[3:end].strip()
-            body = text[end + 4:].strip()
-            try:
-                meta = yaml.safe_load(fm_text) or {}
-            except yaml.YAMLError:
-                meta = {}
-            return meta, body
-    return {}, text
-
-
-# ──────────────────────────────────────────────
 # 관련 개념 탐색
 # ──────────────────────────────────────────────
 
@@ -240,7 +221,7 @@ def find_related_concepts(
             continue
         try:
             text = concept_file.read_text(encoding="utf-8")
-            meta, _ = _parse_frontmatter(text)
+            meta, _ = parse_frontmatter(text)
             source_files = meta.get("source_files", []) or []
 
             for sf in source_files:
