@@ -203,7 +203,7 @@
 
 ### W6 — 위키 삭제 프로세스
 
-- [ ] **W6-01** 위키 삭제 프로세스
+- [x] **W6-01** 위키 삭제 프로세스
   - `scripts/wiki_delete.py` 신규 작성 — 핵심 삭제 로직
     - `find_concepts_by_source(raw_path, wiki_root)` — raw 파일의 `source_files` 기준 연관 concept 탐색
     - `find_concept_by_name(name, wiki_root)` — 이름/슬러그로 concept 파일 탐색
@@ -228,6 +228,18 @@
     - 다른 concept 파일의 `related_concepts` frontmatter + `## 관련 개념` 섹션
     - `.kb_concepts/{slug}.concepts.json` (raw 삭제 시)
     - `raw/` 파일 + `.meta.yaml` (with_raw=True 시)
+
+---
+
+## Phase 7 — 코드 품질
+
+- [x] **CQ-01** frontmatter 파싱 중앙화
+  - `parse_frontmatter` / `dump_frontmatter`를 `token_counter.py` 공유 유틸로 추출
+  - 10개 파일 중복 정의 전량 제거
+
+- [x] **CQ-02** Vision 재실행 병렬화
+  - `retry_vision_pass()` 직렬 for 루프 → `ThreadPoolExecutor(max_workers=4)` 병렬화
+  - 기존 `_run_vision_pass()` 패턴과 통일
 
 ---
 

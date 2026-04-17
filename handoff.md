@@ -37,6 +37,32 @@
 
 ---
 
+## HO-033 | 2026-04-17 | CQ-01, CQ-02 — 코드 품질 개선
+
+**완료:** `token_counter.py`에 공유 유틸 추가 + 10개 파일 중복 제거 + Vision 병렬화
+
+- `parse_frontmatter(text)` / `dump_frontmatter(meta, body)` → `scripts/token_counter.py`에 추가
+- 아래 10개 파일의 로컬 `_parse_frontmatter` / `_dump_frontmatter` 정의 전량 제거:
+  `concept_graph`, `compile`, `index_updater`, `concept_extractor`, `incremental`,
+  `concept_compiler`, `concept_normalizer`, `wiki_delete`, `ingest_ppt`, `api_server`
+- `ingest_ppt._parse_ppt_md()` → `parse_frontmatter()` 1줄 위임으로 단순화
+- `api_server._parse_frontmatter()` → local import 방식 위임 래퍼로 변환
+- `retry_vision_pass()` Vision 루프: 직렬 for → ThreadPoolExecutor(max_workers=4) 병렬화
+  - `_get_vision_settings(settings)` 올바르게 적용 (기존 serial 코드 누락 버그 수정)
+  - `sorted()` 주입으로 슬라이드 순서 보장
+
+**결정사항:**
+- `api_server`는 scripts 모듈 top-level import 없는 구조 → local import 관례 유지
+- `perf.py:_parse_frontmatter_meta`는 meta만 반환하는 별도 함수 → 교체 대상 아님
+
+**주의:**
+- `parse_frontmatter`는 body를 `.strip()` 처리 (기존 `_parse_ppt_md`의 `.lstrip("\n")`과 실질 차이 없음)
+- `token_counter.py`는 scripts 내 다른 모듈 미임포트 → circular import 없음
+
+**다음:** 새 기능 개발 또는 추가 코드 품질 작업
+
+---
+
 ## HO-031 | 2026-04-17 | W6-01 — 위키 삭제 프로세스
 
 **완료:** `scripts/wiki_delete.py` 신규 작성 + `scripts/cli.py`에 2개 명령어 추가
