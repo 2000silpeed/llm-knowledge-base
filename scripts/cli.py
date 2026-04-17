@@ -302,6 +302,137 @@ def _print_ingest_result(result: dict, source: str) -> None:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# remove (W6-01: 위키 삭제 프로세스)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@app.command()
+def remove(
+    source: str = typer.Argument(..., help="삭제할 raw 파일 경로 또는 URL"),
+    wiki_only: bool = typer.Option(False, "--wiki-only", help="wiki 항목만 삭제, raw 파일은 유지"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="삭제 대상 목록만 출력 (실제 삭제 없음)"),
+    force: bool = typer.Option(False, "--force", "-f", help="확인 없이 삭제"),
+    no_index: bool = typer.Option(False, "--no-index", help="_index.md / _summaries.md 갱신 생략"),
+    no_backlinks: bool = typer.Option(False, "--no-backlinks", help="백링크 정리 생략"),
+) -> None:
+    """등록된 raw 파일과 연관 wiki 항목을 삭제합니다 (kb ingest의 역방향).
+
+    \b
+    예시:
+      kb remove raw/articles/2026-04-17_ai-trends.md
+      kb remove raw/papers/attention-is-all-you-need.md --wiki-only
+      kb remove raw/office/회사소개.md --dry-run
+    """
+    settings = _load_settings_safe()
+    _, wiki_dir = _load_team_paths(settings)
+
+    # URL 입력 시 raw 파일 탐색
+    is_web_url = _is_url(source) and not _is_youtube_url(source) and not _is_github_url(source)
+    if _is_url(source):
+        existing = _find_existing_raw(source, settings, is_web_url=is_web_url)
+        if not existing:
+            err_console.print(
+                f"[bold red]오류:[/] 이 URL은 인제스트된 기록이 없습니다: {source}\n"
+                "raw/ 파일 경로를 직접 지정하세요."
+            )
+            raise typer.Exit(code=1)
+        raw_path = existing[0]
+    else:
+        raw_path = Path(source)
+        if not raw_path.exists():
+            err_console.print(f"[bold red]오류:[/] 파일을 찾을 수 없습니다: {source}")
+            raise typer.Exit(code=1)
+
+    from scripts.wiki_delete import find_concepts_by_source, delete_by_raw
+
+    # 삭제 대상 미리 탐색
+    linked_concepts = find_concepts_by_source(raw_path, wiki_dir)
+    with_raw = not wiki_only
+
+    # dry-run 또는 확인
+    if dry_run:
+        _print_remove_preview(raw_path, linked_concepts, with_raw)
+        return
+
+    if not force:
+        _print_remove_preview(raw_path, linked_concepts, with_raw)
+        confirmed = typer.confirm("\n위 항목을 삭제하시겠습니까?")
+        if not confirmed:
+            console.print("[dim]취소됨[/]")
+            raise typer.Exit(0)
+
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True, console=console) as p:
+        p.add_task("삭제 중...", total=None)
+        result = delete_by_raw(
+            raw_path,
+            wiki_dir,
+            with_raw=with_raw,
+            update_index=not no_index,
+            update_backlinks=not no_backlinks,
+            dry_run=False,
+        )
+
+    _print_remove_result(result)
+
+
+def _print_remove_preview(raw_path: Path, linked_concepts: list, with_raw: bool) -> None:
+    """삭제 예정 항목을 미리 출력합니다."""
+    lines = [f"[bold]삭제 대상 미리보기[/]\n"]
+    if with_raw:
+        lines.append(f"  [red]raw 파일:[/] [dim]{raw_path}[/]")
+        meta = raw_path.with_suffix(".meta.yaml")
+        if meta.exists():
+            lines.append(f"  [red]메타:[/] [dim]{meta}[/]")
+    else:
+        lines.append(f"  [dim]raw 유지:[/] {raw_path}")
+
+    if linked_concepts:
+        lines.append(f"\n  [red]wiki concepts ({len(linked_concepts)}개):[/]")
+        for cp in linked_concepts:
+            lines.append(f"    [dim]· wiki/concepts/{cp.name}[/]")
+    else:
+        lines.append("\n  [yellow]연관된 wiki concept 없음[/]")
+
+    console.print(
+        Panel(
+            "\n".join(lines),
+            title="[bold]kb remove[/]",
+            expand=False,
+        )
+    )
+
+
+def _print_remove_result(result: dict) -> None:
+    """삭제 결과를 출력합니다."""
+    concepts = result.get("concepts_deleted", [])
+    aux = result.get("aux_deleted", [])
+
+    lines = ["[bold green]✓ 삭제 완료[/]\n"]
+    if result.get("raw_deleted"):
+        lines.append(f"  raw 파일 삭제: [dim]{result['raw_path']}[/]")
+    if aux:
+        for a in aux:
+            lines.append(f"  보조 파일 삭제: [dim]{a}[/]")
+
+    if concepts:
+        lines.append(f"\n  wiki concepts 삭제: [red]{len(concepts)}개[/]")
+        for c in concepts:
+            name = c.get("concept_name", "?")
+            bl = len(c.get("backlinks_cleaned", []))
+            bl_note = f" (백링크 {bl}개 정리)" if bl else ""
+            lines.append(f"    [dim]· {name}{bl_note}[/]")
+    else:
+        lines.append("\n  연관 wiki concept 없음")
+
+    console.print(
+        Panel(
+            "\n".join(lines),
+            title="[bold]kb remove[/]",
+            expand=False,
+        )
+    )
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # compile
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -1385,6 +1516,108 @@ def watch(
 
 wiki_app = typer.Typer(name="wiki", help="위키 유지관리 명령어 (P5-04).")
 app.add_typer(wiki_app)
+
+
+@wiki_app.command("delete")
+def wiki_delete(
+    concept: str = typer.Argument(..., help="삭제할 wiki 개념 이름 또는 슬러그"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="삭제 대상 목록만 출력 (실제 삭제 없음)"),
+    force: bool = typer.Option(False, "--force", "-f", help="확인 없이 삭제"),
+    no_index: bool = typer.Option(False, "--no-index", help="_index.md / _summaries.md 갱신 생략"),
+    no_backlinks: bool = typer.Option(False, "--no-backlinks", help="백링크 정리 생략"),
+) -> None:
+    """wiki/concepts/ 내 특정 개념 항목을 삭제합니다 (raw 파일은 유지).
+
+    \b
+    예시:
+      kb wiki delete 트랜스포머
+      kb wiki delete "고객 세분화" --dry-run
+      kb wiki delete LLM_지식베이스_시스템 --force
+    """
+    settings = _load_settings_safe()
+    _, wiki_dir = _load_team_paths(settings)
+
+    from scripts.wiki_delete import find_concept_by_name, delete_by_concept_name
+
+    concept_path = find_concept_by_name(concept, wiki_dir)
+    if concept_path is None:
+        err_console.print(
+            f"[bold red]오류:[/] wiki concept를 찾을 수 없습니다: '{concept}'\n"
+            f"wiki/concepts/ 디렉토리를 확인하거나 `kb status`로 목록을 확인하세요."
+        )
+        raise typer.Exit(code=1)
+
+    if dry_run:
+        from scripts.wiki_delete import find_concepts_by_source
+        console.print(
+            Panel(
+                f"[bold]삭제 예정 (dry-run)[/]\n\n"
+                f"  wiki: [red]{concept_path}[/]\n"
+                f"  _index.md 갱신: {'예' if not no_index else '생략'}\n"
+                f"  백링크 정리: {'예' if not no_backlinks else '생략'}",
+                title="[bold]kb wiki delete[/]",
+                expand=False,
+            )
+        )
+        # 백링크 대상 파일 미리 탐색
+        if not no_backlinks:
+            import re as _re
+            link_pattern = _re.compile(r"\[\[" + _re.escape(concept_path.stem) + r"\]\]")
+            concepts_dir = wiki_dir / "concepts"
+            affected = []
+            for f in concepts_dir.glob("*.md"):
+                if f.stem != concept_path.stem:
+                    try:
+                        if link_pattern.search(f.read_text(encoding="utf-8")):
+                            affected.append(f.name)
+                    except Exception:
+                        pass
+            if affected:
+                console.print(f"  백링크 정리 대상 ({len(affected)}개):")
+                for fn in affected:
+                    console.print(f"    [dim]· {fn}[/]")
+        return
+
+    if not force:
+        console.print(
+            f"[yellow]삭제 예정:[/] wiki/concepts/[bold]{concept_path.name}[/]"
+        )
+        confirmed = typer.confirm("이 wiki 항목을 삭제하시겠습니까?")
+        if not confirmed:
+            console.print("[dim]취소됨[/]")
+            raise typer.Exit(0)
+
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True, console=console) as p:
+        p.add_task(f"삭제 중: {concept_path.name}...", total=None)
+        result = delete_by_concept_name(
+            concept,
+            wiki_dir,
+            update_index=not no_index,
+            update_backlinks=not no_backlinks,
+            dry_run=False,
+        )
+
+    if result.get("error") == "not_found":
+        err_console.print(f"[bold red]오류:[/] concept 파일을 찾을 수 없습니다: '{concept}'")
+        raise typer.Exit(code=1)
+
+    bl = result.get("backlinks_cleaned", [])
+    console.print(
+        Panel(
+            f"[bold green]✓ wiki concept 삭제 완료[/]\n\n"
+            f"  개념: [cyan]{result['concept_name']}[/]\n"
+            f"  파일: [dim]{result['concept_path']}[/]\n"
+            f"  _index.md 갱신: {'예' if result.get('index_updated') else '변경 없음'}\n"
+            f"  _summaries.md 갱신: {'예' if result.get('summaries_updated') else '변경 없음'}\n"
+            f"  백링크 정리: {len(bl)}개 파일",
+            title="[bold]kb wiki delete[/]",
+            expand=False,
+        )
+    )
+    if bl:
+        console.print("  정리된 파일:")
+        for fp in bl:
+            console.print(f"    [dim]· {Path(fp).name}[/]")
 
 
 @wiki_app.command("reorg")

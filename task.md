@@ -199,6 +199,38 @@
 
 ---
 
+## Phase 6 — 운영/유지보수
+
+### W6 — 위키 삭제 프로세스
+
+- [ ] **W6-01** 위키 삭제 프로세스
+  - `scripts/wiki_delete.py` 신규 작성 — 핵심 삭제 로직
+    - `find_concepts_by_source(raw_path, wiki_root)` — raw 파일의 `source_files` 기준 연관 concept 탐색
+    - `find_concept_by_name(name, wiki_root)` — 이름/슬러그로 concept 파일 탐색
+    - `remove_from_index(concept_name, wiki_root)` — `_index.md` 항목 제거
+    - `remove_from_summaries(concept_name, wiki_root)` — `_summaries.md` 항목 제거
+    - `clean_backlinks(concept_name, wiki_root)` — 다른 concept 파일의 백링크 정리
+    - `delete_concept(concept_path, wiki_root, ...)` — 단일 concept 삭제
+    - `delete_by_raw(raw_path, wiki_root, with_raw, ...)` — raw 파일 기반 통합 삭제
+  - CLI 명령어 2개 추가 (`scripts/cli.py`)
+    - `kb remove <source>` — raw 파일/URL 제거 + 연관 wiki 통합 삭제
+      - `--wiki-only` : wiki만 삭제, raw 유지
+      - `--dry-run` : 삭제 대상 목록만 출력 (실제 삭제 없음)
+      - `--force` / `-f` : 확인 없이 삭제
+      - `--no-index` : `_index.md` 갱신 생략
+      - `--no-backlinks` : 백링크 정리 생략
+    - `kb wiki delete <concept-name>` — wiki concept만 삭제 (raw 유지)
+      - `--dry-run`, `--force`, `--no-index`, `--no-backlinks`
+  - 삭제 후 자동 정리 대상:
+    - `wiki/concepts/{name}.md`
+    - `wiki/_index.md` 내 `[[개념명]]` 라인 (개념 목록 + 관계 맵)
+    - `wiki/_summaries.md` 내 해당 라인
+    - 다른 concept 파일의 `related_concepts` frontmatter + `## 관련 개념` 섹션
+    - `.kb_concepts/{slug}.concepts.json` (raw 삭제 시)
+    - `raw/` 파일 + `.meta.yaml` (with_raw=True 시)
+
+---
+
 ## 현재 진행 상태
 
 - [x] **W1-04b** PowerPoint 인제스터 — 멀티모달 2-패스 업그레이드
@@ -209,9 +241,11 @@
   - `ingest.slide_render` 플래그로 이미지 패스 on/off 제어
   - LibreOffice 미설치 시 graceful fallback (텍스트 패스만)
 
+- [x] **W6-01** 위키 삭제 프로세스 — 구현 완료
+
 ---
 
 **마지막 업데이트:** 2026-04-17
-**현재 단계:** W1-04b 완료
+**현재 단계:** W6-01 완료
 **블로킹 이슈:** 없음
-**다음 태스크:** PPT 실제 파일로 2-패스 테스트 권장
+**다음 태스크:** W6-01 실제 파일로 테스트 권장

@@ -5,6 +5,43 @@
 
 ---
 
+## HO-031 | 2026-04-17 | W6-01 — 위키 삭제 프로세스
+
+**완료:** `scripts/wiki_delete.py` 신규 작성 + `scripts/cli.py`에 2개 명령어 추가
+
+- `scripts/wiki_delete.py` 핵심 함수:
+  - `find_concepts_by_source(raw_path, wiki_root)` — frontmatter `source_files` 기준 연관 concept 탐색
+  - `find_concept_by_name(name, wiki_root)` — 이름/슬러그/부분매칭 순으로 concept 파일 탐색
+  - `remove_from_index(concept_name, wiki_root)` — `_index.md` 개념 목록·관계 맵에서 해당 라인 제거
+  - `remove_from_summaries(concept_name, wiki_root)` — `_summaries.md` 해당 라인 제거
+  - `clean_backlinks(concept_name, wiki_root)` — 다른 concept 파일의 related_concepts frontmatter + ## 관련 개념 섹션 정리
+  - `delete_concept(concept_path, wiki_root, ...)` — 단일 concept 삭제 (dry_run 지원)
+  - `delete_by_raw(raw_path, wiki_root, with_raw, ...)` — raw 파일 기반 통합 삭제
+  - `delete_by_concept_name(name, wiki_root, ...)` — 이름 기반 삭제 (CLI 진입점)
+- `scripts/cli.py` 추가 명령어:
+  - `kb remove <source>` — raw 파일/URL 제거 + 연관 wiki 통합 삭제
+    - `--wiki-only`, `--dry-run`, `--force/-f`, `--no-index`, `--no-backlinks`
+    - URL 입력 시 기존 `_find_existing_raw()` 재사용해 raw 파일 위치 탐색
+  - `kb wiki delete <concept>` — wiki concept만 삭제 (raw 유지)
+    - `--dry-run`, `--force/-f`, `--no-index`, `--no-backlinks`
+
+**결정사항:**
+- `kb remove`는 `kb ingest`의 역방향 — URL 입력도 지원하기 위해 기존 `_find_existing_raw()` 재사용
+- `--dry-run`은 실제 삭제 없이 예정 항목만 출력 (확인 UX와 분리)
+- `--force` 없으면 미리보기 후 confirm 단계 (Telegram 봇 환경에서는 --force 필수)
+- `clean_backlinks()`는 related_concepts frontmatter 리스트와 ## 관련 개념 섹션 라인 모두 정리
+- raw 파일 삭제 시 `.meta.yaml`과 `.kb_concepts/{slug}.concepts.json`도 함께 삭제
+- `raw/images/` 이미지는 공유 가능성 있으므로 삭제 대상에서 제외 (기존 방침 유지)
+
+**주의:**
+- `find_concepts_by_source()`는 frontmatter `source_files`가 없는 구형 concept 파일은 탐색 불가
+- `find_concept_by_name()`은 부분 매칭 허용 — 의도치 않은 파일이 탐색될 수 있으므로 dry-run 확인 권장
+- Telegram 봇에서 호출 시 interactive confirm 불가 → `--force` 플래그 필수
+
+**다음:** W6-01 실제 파일로 테스트 후 결과 확인
+
+---
+
 ## HO-030 | 2026-04-17 | W1-04b — PPT 인제스터 멀티모달 2-패스 업그레이드
 
 **완료:** `scripts/ingest_ppt.py` 전면 재설계 — 텍스트 패스 + 이미지 패스 + 조립
