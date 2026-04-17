@@ -201,7 +201,17 @@
 
 ## 현재 진행 상태
 
-**마지막 업데이트:** 2026-04-10
-**현재 단계:** P4-02 완료
+- [x] **W1-04b** PowerPoint 인제스터 — 멀티모달 2-패스 업그레이드
+  - 텍스트 패스: 기존 python-pptx 추출 유지
+  - 이미지 패스: LibreOffice → PyMuPDF(fitz) 슬라이드 PNG 렌더링 → Gemma 4 Vision 상세 분석
+  - 조립: 슬라이드별 텍스트 + `### 시각 분석` 섹션 병합
+  - `vision_llm` 설정 블록 추가 (settings.yaml) — 주 LLM과 독립적으로 Ollama Gemma 설정 가능
+  - `ingest.slide_render` 플래그로 이미지 패스 on/off 제어
+  - LibreOffice 미설치 시 graceful fallback (텍스트 패스만)
+
+---
+
+**마지막 업데이트:** 2026-04-17
+**현재 단계:** W1-04b 완료
 **블로킹 이슈:** 없음
-**다음 태스크:** 없음 (P4 전체 완료, Phase 5 전체 완료)
+**다음 태스크:** PPT 실제 파일로 2-패스 테스트 권장

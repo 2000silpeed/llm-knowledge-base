@@ -5,6 +5,46 @@
 
 ---
 
+## HO-030 | 2026-04-17 | W1-04b — PPT 인제스터 멀티모달 2-패스 업그레이드
+
+**완료:** `scripts/ingest_ppt.py` 전면 재설계 — 텍스트 패스 + 이미지 패스 + 조립
+
+- `_render_slides_to_png(pptx_path, outdir)` 신규
+  - LibreOffice headless → PPTX를 PDF로 변환
+  - PyMuPDF(fitz) 2x 해상도(144 DPI)로 페이지별 PNG 렌더링
+  - 임시 디렉토리 사용, 완료 후 PDF 삭제
+- `_analyze_slide_image(image_bytes, slide_num, settings)` 신규
+  - 슬라이드 전체 이미지 → Vision LLM 상세 분석 (주제·텍스트·차트·다이어그램·강조 항목)
+  - `_get_vision_settings()` 통해 `vision_llm` 설정 자동 적용
+- `_assemble_slide(text_md, visual_analysis)` 신규
+  - 텍스트 패스 결과 + `### 시각 분석\n{analysis}` 조립
+- `ingest_ppt()` 수정
+  - 3단계 흐름: 텍스트 패스 → 이미지 패스 → 조립
+  - `do_slide_render` 플래그: `ingest.slide_render` 설정 기반
+  - 이미지 패스 실패 시 경고 로그 후 텍스트 패스 결과만 사용 (graceful fallback)
+  - 결과 dict에 `visual_pass: bool` 추가
+- `config/settings.yaml` 수정
+  - `ingest.slide_render: true` 추가
+  - `vision_llm` 블록 추가 (provider/model/base_url)
+- `scripts/llm.py` 수정
+  - `_vision_ollama` 타임아웃 120s → 300s (슬라이드 상세 분석 대응)
+
+**결정사항:**
+- `vision_llm` 설정이 없으면 기본 `llm` 설정으로 vision 호출 → 기존 Anthropic 사용자도 자동 동작
+- LibreOffice 미설치 시 `RuntimeError`를 잡아 경고만 출력하고 텍스트 패스 결과 반환
+- 슬라이드 PNG는 `tempfile.TemporaryDirectory`에 저장 → 처리 후 자동 삭제 (디스크 절약)
+- 임베드 이미지 캡션(`_generate_caption`)은 그대로 유지 — 슬라이드 전체 분석과 별개
+
+**주의:**
+- LibreOffice 필수: `sudo apt install libreoffice` 또는 `brew install libreoffice`
+- Gemma 4 사용 시: `ollama pull gemma3:4b` (또는 출시 모델명으로 업데이트)
+- `settings.yaml`의 `vision_llm.model`을 실제 설치된 모델명과 일치시킬 것
+- 슬라이드 수 × Vision 호출 시간 → 대형 PPT(50장+)는 수 분 소요 예상
+
+**다음:** PPT 파일로 실제 테스트 후 출력 품질 확인
+
+---
+
 ## HO-029 | 2026-04-17 | 위키 컴파일 파이프라인 재설계
 
 **완료:** 정보 손실 및 단일 개념 생성 문제 해결

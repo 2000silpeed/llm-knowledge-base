@@ -77,6 +77,15 @@ paths:
 ingest:
   image_download: true           # 외부 이미지 URL → 로컬 raw/images/ 저장 여부
   vision_caption: true           # 이미지 → Claude Vision API 캡션 자동 생성
+  slide_render: true             # PPT 슬라이드 전체 이미지 렌더링 + Vision 분석 (LibreOffice 필요)
+
+# PPT 슬라이드 시각 분석 전용 Vision LLM
+# 없으면 기본 llm 설정 사용. Gemma 4 멀티모달 권장.
+# 사전 준비: ollama serve  &&  ollama pull gemma3:4b (또는 gemma4 출시 후 업데이트)
+vision_llm:
+  provider: ollama
+  model: gemma3:4b               # 멀티모달 지원 모델 (llava, gemma3, 등)
+  base_url: http://localhost:11434
 
 cache:
   enabled: true       # LLM 응답 캐싱 활성화 (동일 입력 → API 미호출 → 비용 절감)

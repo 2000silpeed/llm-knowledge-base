@@ -1,11 +1,19 @@
-"""PowerPoint 인제스터 (W1-04)
+"""PowerPoint 인제스터 (W1-04) — 멀티모달 2-패스 버전
 
-python-pptx로 슬라이드별 파싱 → 마크다운 변환
-슬라이드: `## Slide N: 제목` 형식
-슬라이드 이미지: Vision API 캡션 (vision_caption 플래그)
-발표자 노트: `> Note:` 블록쿼트
-청킹: 10슬라이드 단위 분할, 전체 목차 반복 포함
-출력: raw/office/{파일명}.md + raw/office/{파일명}.meta.yaml
+텍스트 패스: python-pptx로 슬라이드별 텍스트/테이블/이미지 캡션 추출
+이미지 패스: LibreOffice headless → PyMuPDF로 슬라이드 PNG 렌더링 → Vision LLM 상세 분석
+조립:       슬라이드별 텍스트 + ### 시각 분석 섹션 병합 → 최종 마크다운
+
+필수 외부 도구 (이미지 패스 활성화 시):
+  - LibreOffice (libreoffice 명령)
+  - PyMuPDF (fitz, pyproject.toml 의존성에 포함)
+
+설정:
+  ingest.slide_render: true         # 슬라이드 이미지 렌더링 활성화 (기본: true)
+  vision_llm:                        # (선택) 별도 Vision 모델 설정, 없으면 기본 llm 사용
+    provider: ollama
+    model: gemma3:4b
+    base_url: http://localhost:11434
 
 사용 예:
     from scripts.ingest_ppt import ingest_ppt
@@ -13,13 +21,13 @@ python-pptx로 슬라이드별 파싱 → 마크다운 변환
     # {"status": "ok", "path": "raw/office/file.md", "slides": 24, ...}
 """
 
-import base64
 import hashlib
-import io
 import logging
-import os
 import re
+import subprocess
+import tempfile
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -41,11 +49,87 @@ def _slugify(text: str, max_len: int = 60) -> str:
 
 
 # ──────────────────────────────────────────────
-# Vision 캡션
+# Vision 설정 헬퍼
+# ──────────────────────────────────────────────
+
+def _get_vision_settings(settings: dict) -> dict:
+    """비전 분석용 settings 반환.
+
+    settings에 'vision_llm' 키가 있으면 해당 설정으로 llm을 대체합니다.
+    없으면 기본 llm 설정을 그대로 사용합니다.
+    """
+    if "vision_llm" in settings:
+        return {**settings, "llm": settings["vision_llm"]}
+    return settings
+
+
+# ──────────────────────────────────────────────
+# 슬라이드 이미지 렌더링 (LibreOffice + PyMuPDF)
+# ──────────────────────────────────────────────
+
+def _render_slides_to_bytes(pptx_path: Path, work_dir: Path) -> list[bytes]:
+    """PPTX → PDF → 슬라이드별 PNG bytes 변환 (디스크 PNG 저장 없음).
+
+    LibreOffice headless로 PPTX를 PDF로 변환한 뒤,
+    PyMuPDF(fitz)로 페이지별 PNG bytes를 메모리에서 생성합니다.
+
+    Args:
+        pptx_path: 원본 .pptx 파일 경로
+        work_dir:  LibreOffice PDF 출력 디렉토리 (임시 디렉토리)
+
+    Returns:
+        슬라이드 순서대로 정렬된 PNG bytes 목록
+
+    Raises:
+        RuntimeError: LibreOffice 또는 PyMuPDF 오류
+    """
+    import fitz  # PyMuPDF
+
+    pdf_path = work_dir / (pptx_path.stem + ".pdf")
+
+    try:
+        result = subprocess.run(
+            [
+                "libreoffice", "--headless", "--convert-to", "pdf",
+                "--outdir", str(work_dir), str(pptx_path),
+            ],
+            capture_output=True,
+            timeout=120,
+        )
+    except FileNotFoundError:
+        raise RuntimeError(
+            "LibreOffice를 찾을 수 없습니다. "
+            "'sudo apt install libreoffice' 또는 'brew install libreoffice'로 설치하세요."
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("LibreOffice 변환 타임아웃 (120초 초과)")
+
+    if result.returncode != 0:
+        err = result.stderr.decode(errors="replace").strip()
+        raise RuntimeError(f"LibreOffice 변환 실패 (code={result.returncode}): {err}")
+
+    if not pdf_path.exists():
+        raise RuntimeError(f"LibreOffice 변환 후 PDF를 찾을 수 없습니다: {pdf_path}")
+
+    # PDF → 슬라이드별 PNG bytes (PyMuPDF, 2x 해상도, 디스크 저장 없음)
+    mat = fitz.Matrix(2.0, 2.0)  # 144 DPI — 차트/텍스트 선명도 확보
+    with fitz.open(str(pdf_path)) as doc:
+        slide_bytes = [
+            doc[page_num].get_pixmap(matrix=mat).tobytes("png")
+            for page_num in range(len(doc))
+        ]
+
+    pdf_path.unlink(missing_ok=True)
+    logger.info("슬라이드 렌더링 완료: %d장", len(slide_bytes))
+    return slide_bytes
+
+
+# ──────────────────────────────────────────────
+# Vision 캡션 (기존 — 임베드 이미지용)
 # ──────────────────────────────────────────────
 
 def _generate_caption(image_bytes: bytes, ext: str, settings: dict) -> str:
-    """Vision API로 슬라이드 이미지 캡션을 한 문장 생성합니다."""
+    """Vision API로 슬라이드 임베드 이미지의 한 문장 캡션을 생성합니다."""
     try:
         from scripts.llm import call_vision
 
@@ -66,17 +150,81 @@ def _generate_caption(image_bytes: bytes, ext: str, settings: dict) -> str:
 
 
 # ──────────────────────────────────────────────
-# 슬라이드 → 마크다운
+# Vision 슬라이드 상세 분석 (신규)
+# ──────────────────────────────────────────────
+
+def _analyze_slide_image(image_bytes: bytes, slide_num: int, settings: dict) -> str:
+    """슬라이드 전체 이미지를 Vision LLM으로 상세 분석합니다.
+
+    텍스트 추출이 놓친 시각적 정보(차트·다이어그램·레이아웃·강조)를 보완합니다.
+
+    Args:
+        image_bytes: 슬라이드 PNG 바이너리
+        slide_num:   슬라이드 번호 (1-based, 로그용)
+        settings:    load_settings() 결과 (vision_llm 있으면 자동 사용)
+
+    Returns:
+        마크다운 형식의 분석 텍스트. 오류 시 빈 문자열.
+    """
+    from scripts.llm import call_vision
+
+    vision_settings = _get_vision_settings(settings)
+    prompt = (
+        "이 프레젠테이션 슬라이드를 분석하여 마크다운으로 정리하세요.\n\n"
+        "다음 항목을 순서대로 작성하세요 (해당 내용이 있는 항목만):\n"
+        "- **주제**: 슬라이드의 핵심 메시지 (1~2문장)\n"
+        "- **텍스트**: 슬라이드에 표시된 주요 텍스트·레이블·수치 (목록으로)\n"
+        "- **차트/그래프**: 종류, 축 레이블, 주요 데이터 포인트, 추세\n"
+        "- **표**: 행/열 구조와 주요 셀 값\n"
+        "- **다이어그램/흐름도**: 구성 요소와 상호 관계\n"
+        "- **시각적 강조**: 색상·크기·배치로 부각된 정보\n\n"
+        "없는 항목은 생략하고 한국어로 답하세요."
+    )
+
+    try:
+        result = call_vision(image_bytes, "image/png", prompt, vision_settings).strip()
+        logger.debug("슬라이드 %d 시각 분석 완료 (%d자)", slide_num, len(result))
+        return result
+    except Exception as exc:
+        logger.warning("슬라이드 %d 시각 분석 실패 (건너뜀): %s", slide_num, exc)
+        return ""
+
+
+def _run_vision_pass(slide_bytes_list: list[bytes], settings: dict) -> list[str]:
+    """슬라이드 이미지 배열을 병렬로 Vision LLM 분석합니다.
+
+    concept_extractor.py의 ThreadPoolExecutor 패턴과 동일.
+    Ollama는 GPU 요청을 서버 측에서 직렬화하지만,
+    I/O·HTTP 오버헤드를 overlap하여 전체 시간을 단축합니다.
+    """
+    analyses: list[str] = [""] * len(slide_bytes_list)
+
+    def _analyze(args: tuple[int, bytes]) -> tuple[int, str]:
+        idx, img_bytes = args
+        return idx, _analyze_slide_image(img_bytes, idx + 1, settings)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {
+            executor.submit(_analyze, (i, b)): i
+            for i, b in enumerate(slide_bytes_list)
+        }
+        for future in as_completed(futures):
+            try:
+                idx, analysis = future.result()
+                analyses[idx] = analysis
+            except Exception as e:
+                slide_num = futures[future] + 1
+                logger.warning("슬라이드 %d Vision 분석 실패 (건너뜀): %s", slide_num, e)
+
+    return analyses
+
+
+# ──────────────────────────────────────────────
+# 슬라이드 → 마크다운 (텍스트 패스)
 # ──────────────────────────────────────────────
 
 def _shape_to_text(shape) -> str:
     """도형에서 텍스트를 추출합니다."""
-    try:
-        from pptx.util import Pt
-        from pptx.enum.text import PP_ALIGN
-    except ImportError:
-        pass
-
     if not shape.has_text_frame:
         return ""
 
@@ -86,8 +234,7 @@ def _shape_to_text(shape) -> str:
         if not text:
             continue
 
-        # 헤딩 수준 추정: 폰트 크기 기반
-        level = para.level  # 0-based 들여쓰기 레벨
+        level = para.level
         font_size = None
         for run in para.runs:
             if run.font and run.font.size:
@@ -139,7 +286,7 @@ def _slide_to_markdown(
     do_vision: bool,
     settings: dict,
 ) -> tuple[str, list[str]]:
-    """슬라이드를 마크다운으로 변환합니다.
+    """슬라이드 텍스트 패스: python-pptx로 텍스트/테이블/임베드 이미지 추출.
 
     Returns:
         (markdown_text, list_of_saved_image_paths)
@@ -149,28 +296,26 @@ def _slide_to_markdown(
     sections: list[str] = []
     saved_images: list[str] = []
 
-    # 제목 추출: placeholder type 15 (TITLE) 또는 첫 번째 텍스트 도형
+    # 제목 추출
     title_text = ""
     body_shapes = []
 
     for shape in slide.shapes:
         try:
             ph = shape.placeholder_format
-            if ph is not None and ph.idx in (0, 1):  # 0=title, 1=center title
+            if ph is not None and ph.idx in (0, 1):
                 title_text = shape.text.strip()
                 continue
         except Exception:
             pass
         body_shapes.append(shape)
 
-    # 슬라이드 헤딩
     heading = f"## Slide {slide_num}" + (f": {title_text}" if title_text else "")
     sections.append(heading)
 
     # 본문 도형 처리
     for shape in body_shapes:
         try:
-            # 이미지 도형
             if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
                 img_blob = shape.image.blob
                 img_ext = shape.image.ext or "png"
@@ -179,7 +324,7 @@ def _slide_to_markdown(
                 dest = images_dir / filename
                 if not dest.exists():
                     dest.write_bytes(img_blob)
-                    logger.debug("슬라이드 이미지 저장: slide%d → %s", slide_num, dest)
+                    logger.debug("임베드 이미지 저장: slide%d → %s", slide_num, dest)
                 saved_images.append(str(dest))
 
                 caption = ""
@@ -188,14 +333,12 @@ def _slide_to_markdown(
                 sections.append(f"![{caption or '슬라이드 이미지'}](raw/images/{filename})")
                 continue
 
-            # 테이블 도형
             if shape.has_table:
                 table_md = _table_shape_to_markdown(shape)
                 if table_md:
                     sections.append(table_md)
                 continue
 
-            # 텍스트 도형
             if shape.has_text_frame:
                 text = _shape_to_text(shape)
                 if text:
@@ -242,6 +385,18 @@ def _extract_slide_title(slide) -> str:
 
 
 # ──────────────────────────────────────────────
+# 슬라이드 조립 (텍스트 + 시각 분석)
+# ──────────────────────────────────────────────
+
+def _assemble_slide(text_md: str, visual_analysis: str) -> str:
+    """텍스트 패스 결과와 시각 분석 결과를 하나의 슬라이드 섹션으로 조립합니다."""
+    if not visual_analysis:
+        return text_md
+
+    return f"{text_md}\n\n### 시각 분석\n\n{visual_analysis}"
+
+
+# ──────────────────────────────────────────────
 # 퍼블릭 진입점
 # ──────────────────────────────────────────────
 
@@ -250,23 +405,28 @@ def ingest_ppt(
     project_root: Path | str | None = None,
     settings: dict | None = None,
 ) -> dict:
-    """PowerPoint 파일(.pptx)을 인제스트합니다.
+    """PowerPoint 파일(.pptx)을 인제스트합니다 — 2-패스 멀티모달 버전.
+
+    텍스트 패스: python-pptx 기반 텍스트·테이블·임베드 이미지 추출
+    이미지 패스: LibreOffice 렌더링 + Vision LLM 슬라이드 상세 분석 (선택적)
+    조립:       슬라이드별 병합 → 최종 마크다운 파일 생성
 
     Args:
-        ppt_path: PowerPoint 파일 경로
+        ppt_path:     PowerPoint 파일 경로
         project_root: 프로젝트 루트 경로. None이면 이 파일 기준 상위 디렉토리.
-        settings: 설정 dict. None이면 settings.yaml 자동 로드.
+        settings:     설정 dict. None이면 settings.yaml 자동 로드.
 
     Returns:
         {
-            "status": "ok" | "error",
-            "path": str,          # 저장된 .md 파일 경로
-            "meta_path": str,     # 저장된 .meta.yaml 파일 경로
-            "title": str,
-            "slides": int,
-            "token_count": int,
-            "images": list[str],
-            "message": str,       # 오류 시 메시지
+            "status":       "ok" | "error",
+            "path":         str,          # 저장된 .md 파일 경로
+            "meta_path":    str,          # 저장된 .meta.yaml 파일 경로
+            "title":        str,
+            "slides":       int,
+            "token_count":  int,
+            "images":       list[str],
+            "visual_pass":  bool,         # 이미지 패스 성공 여부
+            "message":      str,          # 오류 시 메시지
         }
     """
     try:
@@ -292,8 +452,12 @@ def ingest_ppt(
     office_dir.mkdir(parents=True, exist_ok=True)
     images_dir.mkdir(parents=True, exist_ok=True)
 
-    slides_per_chunk = settings.get("chunking", {}).get("ppt_slides_per_chunk", 10)
-    do_vision = settings.get("ingest", {}).get("vision_caption", True)
+    ingest_cfg = settings.get("ingest", {})
+    chunking_cfg = settings.get("chunking", {})
+
+    slides_per_chunk = chunking_cfg.get("ppt_slides_per_chunk", 10)
+    do_vision = ingest_cfg.get("vision_caption", True)
+    do_slide_render = ingest_cfg.get("slide_render", True)
 
     logger.info("PowerPoint 로드 중: %s", ppt_path)
 
@@ -306,7 +470,7 @@ def ingest_ppt(
     slide_count = len(slides)
     collected_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    # 프레젠테이션 제목: 코어 속성 또는 파일명
+    # 프레젠테이션 제목
     title = ppt_path.stem
     try:
         core_props = prs.core_properties
@@ -315,33 +479,54 @@ def ingest_ppt(
     except Exception:
         pass
 
-    # 모든 슬라이드 제목 수집 (목차용)
+    # 슬라이드 제목 목록 (목차용)
     slide_titles: list[tuple[int, str]] = []
     for i, slide in enumerate(slides, start=1):
         slide_titles.append((i, _extract_slide_title(slide)))
 
     toc_text = _build_toc(slide_titles)
 
-    # 슬라이드별 마크다운 변환
-    all_slide_mds: list[str] = []
+    # ── 텍스트 패스 ──
+    logger.info("텍스트 패스 시작 (%d슬라이드)", slide_count)
+    text_mds: list[str] = []
     all_images: list[str] = []
 
     for i, slide in enumerate(slides, start=1):
-        logger.debug("슬라이드 처리 중: %d/%d", i, slide_count)
+        logger.debug("텍스트 패스 슬라이드 처리: %d/%d", i, slide_count)
         slide_md, slide_images = _slide_to_markdown(
             slide, i, images_dir, do_vision, settings
         )
-        all_slide_mds.append(slide_md)
+        text_mds.append(slide_md)
         all_images.extend(slide_images)
 
-    # 10슬라이드 단위 청크 분할 + 목차 반복
+    # ── 이미지 패스 (선택적) ──
+    visual_analyses: list[str] = [""] * slide_count
+    visual_pass_ok = False
+
+    if do_slide_render:
+        logger.info("이미지 패스 시작 — LibreOffice 렌더링 후 Vision 분석")
+        try:
+            with tempfile.TemporaryDirectory(prefix="kb_ppt_") as tmp_dir:
+                slide_bytes_list = _render_slides_to_bytes(ppt_path, Path(tmp_dir))
+                visual_analyses = _run_vision_pass(slide_bytes_list, settings)
+            visual_pass_ok = True
+            logger.info("이미지 패스 완료")
+        except Exception as exc:
+            logger.warning("이미지 패스 실패 — 텍스트 패스만 사용합니다: %s", exc)
+    else:
+        logger.info("이미지 패스 비활성화 (ingest.slide_render: false)")
+
+    # ── 조립 패스 ──
+    assembled_mds = [_assemble_slide(t, v) for t, v in zip(text_mds, visual_analyses)]
+
+    # ── 청크 분할 + 목차 반복 ──
     chunk_count = max(1, -(-slide_count // slides_per_chunk))
     chunks: list[str] = []
 
     for chunk_idx in range(chunk_count):
         start = chunk_idx * slides_per_chunk
         end = min(start + slides_per_chunk, slide_count)
-        chunk_slides = all_slide_mds[start:end]
+        chunk_slides = assembled_mds[start:end]
 
         if chunk_count > 1:
             chunk_header = (
@@ -359,7 +544,7 @@ def ingest_ppt(
     body = "\n\n---\n\n".join(chunks)
     token_count = estimate_tokens(body)
 
-    # 이미지 경로를 프로젝트 루트 상대 경로로 정규화
+    # 이미지 경로 정규화
     rel_images: list[str] = []
     for img_path in all_images:
         try:
@@ -374,11 +559,12 @@ def ingest_ppt(
         "slides": slide_count,
         "token_count": token_count,
         "images": rel_images,
+        "visual_pass": visual_pass_ok,
     }
     fm_str = yaml.dump(frontmatter, allow_unicode=True, default_flow_style=False, sort_keys=False)
     document = f"---\n{fm_str}---\n\n# {title}\n\n{body}\n"
 
-    # 파일명 결정 (충돌 방지)
+    # 파일명 결정
     stem = _slugify(ppt_path.stem) or "presentation"
     filename = f"{stem}.md"
     dest = office_dir / filename
@@ -400,6 +586,7 @@ def ingest_ppt(
         "chunk_count": chunk_count,
         "token_count": token_count,
         "images": rel_images,
+        "visual_pass": visual_pass_ok,
         "slide_titles": [{"num": n, "title": t} for n, t in slide_titles],
     }
     meta_filename = dest.stem + ".meta.yaml"
@@ -411,7 +598,8 @@ def ingest_ppt(
     meta_rel_path = str(meta_dest.relative_to(project_root))
 
     logger.info(
-        "저장 완료: %s (슬라이드: %d, 토큰: %d)", rel_path, slide_count, token_count
+        "저장 완료: %s (슬라이드: %d, 토큰: %d, 시각 분석: %s)",
+        rel_path, slide_count, token_count, "완료" if visual_pass_ok else "미실행",
     )
 
     return {
@@ -422,4 +610,5 @@ def ingest_ppt(
         "slides": slide_count,
         "token_count": token_count,
         "images": rel_images,
+        "visual_pass": visual_pass_ok,
     }

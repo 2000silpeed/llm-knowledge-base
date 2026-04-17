@@ -335,7 +335,7 @@ def _vision_ollama(b64: str, media_type: str, prompt: str, llm_cfg: dict) -> str
     }
 
     try:
-        resp = requests.post(url, json=payload, timeout=120)
+        resp = requests.post(url, json=payload, timeout=300)
         resp.raise_for_status()
         return resp.json().get("response", "")
     except Exception as e:
