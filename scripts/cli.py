@@ -665,6 +665,22 @@ def _auto_commit_wiki(settings: dict) -> None:
     # skipped는 조용히 처리
 
 
+def _auto_update_search_index(settings: dict) -> None:
+    """wiki/ 변경 후 검색 인덱스(.kb_search.db)를 증분 갱신합니다."""
+    from scripts.search_index import build_index
+
+    _, wiki_dir = _load_team_paths(settings)
+    db_path = _PROJECT_ROOT / ".kb_search.db"
+    try:
+        result = build_index(wiki_root=wiki_dir, db_path=db_path)
+        n = result["indexed"]
+        total = result["total"]
+        if n > 0:
+            console.print(f"[dim]검색 인덱스 갱신: {n}건 추가/갱신, 총 {total}건[/]")
+    except Exception as exc:
+        console.print(f"[yellow]검색 인덱스 갱신 실패 (무시):[/] {exc}")
+
+
 def _compile_single(file_path: str, settings: dict, update_index: bool, max_workers: int) -> None:
     path = Path(file_path)
     if not path.exists():
@@ -697,6 +713,7 @@ def _compile_single(file_path: str, settings: dict, update_index: bool, max_work
         )
 
     _print_compile_result_p5(result)
+    _auto_update_search_index(settings)
     _auto_commit_wiki(settings)
 
 
@@ -759,6 +776,7 @@ def _compile_all(
         )
 
     if success:
+        _auto_update_search_index(settings)
         _auto_commit_wiki(settings)
 
 
@@ -813,6 +831,7 @@ def _compile_changed(settings: dict, dry_run: bool, update_index: bool, max_work
         console.print(f"  [yellow]충돌 기록:[/] wiki/conflicts/ 확인 필요")
 
     if compiled and not dry_run:
+        _auto_update_search_index(settings)
         _auto_commit_wiki(settings)
 
 
@@ -1130,6 +1149,44 @@ def query(
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # status
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@app.command(name="index")
+def index_cmd(
+    rebuild: bool = typer.Option(False, "--rebuild", "-r", help="전체 재구축 (기본: 증분 갱신)"),
+) -> None:
+    """wiki/ 파일로 SQLite FTS5 검색 인덱스(.kb_search.db)를 구축합니다.
+
+    \b
+    예시:
+      kb index           # 변경된 파일만 갱신
+      kb index --rebuild # 전체 재구축
+    """
+    settings = _load_settings_safe()
+    _, wiki_dir = _load_team_paths(settings)
+    db_path = _PROJECT_ROOT / ".kb_search.db"
+
+    from scripts.search_index import build_index
+
+    mode = "전체 재구축" if rebuild else "증분 갱신"
+    console.print(f"[dim]검색 인덱스 {mode} 중...[/]")
+
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True, console=console) as p:
+        p.add_task(f"검색 인덱스 {mode} 중...", total=None)
+        result = build_index(wiki_root=wiki_dir, db_path=db_path, rebuild=rebuild)
+
+    console.print(
+        Panel(
+            f"[bold green]✓ 검색 인덱스 완료[/]\n\n"
+            f"  추가/갱신: [cyan]{result['indexed']}[/]\n"
+            f"  건너뜀:    [dim]{result['skipped']}[/]\n"
+            f"  삭제:      [dim]{result['deleted']}[/]\n"
+            f"  총 문서:   [yellow]{result['total']}[/]\n"
+            f"  DB 경로:   [dim]{db_path}[/]",
+            title="[bold]kb index[/]",
+            expand=False,
+        )
+    )
+
 
 @app.command()
 def status() -> None:

@@ -5,6 +5,39 @@
 
 ---
 
+## HO-039 | 2026-04-19 | P2-09 — SQLite FTS5 검색 인덱스
+
+**완료:** SQLite FTS5 검색 인덱스 구축 + 웹 UI 검색 API 교체
+
+- `scripts/search_index.py` 신규
+  - `build_index(wiki_root, db_path, rebuild=False)` — wiki/concepts/ + wiki/explorations/ 스캔
+  - SQLite FTS5 테이블 + 트리거(INSERT/DELETE/UPDATE 자동 동기화)
+  - mtime 기반 증분 갱신 (변경된 파일만 재인덱싱)
+  - `search(query, db_path, limit)` — prefix 검색 (`*`) + FTS5 rank 정렬
+- `scripts/cli.py`
+  - `kb index [--rebuild]` 명령어 추가
+  - `_auto_update_search_index(settings)` — `kb compile` 완료 후 자동 갱신 (3곳 훅)
+- `web/app/api/search/route.ts` 교체
+  - SQLite 우선 조회, DB 없으면 Fuse.js fallback (하위 호환)
+  - 응답에 `engine: "sqlite" | "fuse"` 포함
+- `web/package.json` — `better-sqlite3` + `@types/better-sqlite3` 추가
+
+**결정사항:**
+- DB 경로: `.kb_search.db` (프로젝트 루트) — settings.yaml 경유 없이 고정 경로
+- FTS5 `content=''` 대신 `content='documents'` 테이블 참조 방식 — 트리거로 자동 동기화
+- tokenize: `unicode61 remove_diacritics 2` — 한글/영어 유니코드 정규화 지원
+- 웹 API: `require("better-sqlite3")` 동적 로딩 — Next.js 번들링에서 native 모듈 제외
+- FTS5 prefix 쿼리: 마지막 토큰에 `*` 추가 → 타이핑 중 실시간 검색 지원
+
+**주의:**
+- `better-sqlite3`는 native addon → Node.js 버전 불일치 시 rebuild 필요 (`pnpm rebuild better-sqlite3`)
+- FTS5 특수문자(`"`, `AND`, `OR`, `NOT` 등) → `[^\w\s가-힣]` 제거로 이스케이프
+- `kb index`는 wiki/가 비어 있어도 오류 없음 (total=0 반환)
+
+**다음:** 신규 기획 또는 실사용 테스트
+
+---
+
 ## HO-038 | 2026-04-19 | W1-09 — Word 트랙변경 내역 포함 옵션
 
 **완료:** `ingest_word()` + CLI에 트랙변경 파싱 옵션 추가

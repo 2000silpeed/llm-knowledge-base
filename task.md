@@ -271,6 +271,15 @@
   - 출력: `raw/notes/{날짜}_{슬러그}.md` + `.meta.yaml`
   - frontmatter: `source: inline`, `collected_at`, `title`
 
+- [x] **P2-09** SQLite FTS5 검색 인덱스
+  - `scripts/search_index.py` — `build_index(wiki_root, db_path)` 함수
+    - wiki/concepts/ + wiki/explorations/ 스캔 → SQLite FTS5 테이블 구축
+    - `kb index [--rebuild]` CLI 명령어
+    - `kb compile` 완료 후 자동 인덱스 갱신
+  - `web/app/api/search/route.ts` — `better-sqlite3`로 DB 조회
+    - DB 없으면 Fuse.js fallback (하위 호환)
+  - DB 경로: `.kb_search.db` (프로젝트 루트)
+
 - [x] **W1-09** Word 트랙변경 내역 포함 옵션
   - `ingest_word(include_tracked_changes=False)` 파라미터 추가
   - `w:ins` → `++삽입 텍스트++` / `w:del` → `~~삭제 텍스트~~` 마크다운 변환
@@ -311,6 +320,6 @@
 ---
 
 **마지막 업데이트:** 2026-04-19
-**현재 단계:** W1-09 완료
+**현재 단계:** P2-09 완료 (기획서 미구현 전체 완료)
 **블로킹 이슈:** 없음
-**다음 태스크:** SQLite 검색 인덱스 (기획서 §4.3 Phase 2) 또는 신규 기획
+**다음 태스크:** 신규 기획 또는 실사용 테스트

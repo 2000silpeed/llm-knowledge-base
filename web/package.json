@@ -9,7 +9,9 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/d3": "^7.4.3",
+    "better-sqlite3": "^12.9.0",
     "d3": "^7.9.0",
     "fuse.js": "^7.1.0",
     "gray-matter": "^4.0.3",
