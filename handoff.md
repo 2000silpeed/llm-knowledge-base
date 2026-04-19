@@ -5,6 +5,40 @@
 
 ---
 
+## HO-037 | 2026-04-19 | W8-01 / W1-07 / W1-08 — 기획서 미구현 항목 3종
+
+**완료:** wiki 자동 git 커밋 + 텍스트 직접 입력 + 이미지 파일 인제스터 구현
+
+- `scripts/wiki_git.py` — `auto_commit_wiki(wiki_root, message, settings)` 신규
+  - `_find_git_root()`: wiki/ 경로 부모를 순회해 .git 탐색
+  - `git add {rel_wiki}` → `git commit -m "kb: auto-compile YYYY-MM-DD HH:MM"`
+  - git 미설치 / repo 아님 / 변경 없음 → `{"status": "skipped"}` (크래시 없음)
+- `config/settings.yaml` — `wiki.auto_commit: true` 추가
+- `scripts/cli.py` — `_auto_commit_wiki(settings)` 헬퍼 + `_compile_single/all/changed` 3곳 호출 추가
+- `scripts/ingest_text.py` — `ingest_text(text, title, ...)` 신규
+  - 출력: `raw/notes/{날짜}_{슬러그}.md` + `.meta.yaml`
+  - 첫 줄이 `#`으로 시작하면 그대로 사용, 아니면 `# {title}` 헤더 추가
+- `scripts/ingest_image.py` — `ingest_image(image_path, ...)` 신규
+  - 이미지 → MD5 해시 파일명으로 `raw/images/{hash}{ext}` 복사
+  - Vision API 캡션 → `raw/images/{날짜}_{슬러그}.md` 마크다운 저장
+- `scripts/cli.py` — `ingest` 커맨드에 `--text`/`--title` 옵션 + stdin(`-`) + 이미지 확장자 분기 추가
+
+**결정사항:**
+- `wiki_git.py`: git repo 탐색을 wiki/ 경로에서 위로 순회 — 프로젝트 루트와 wiki/가 같은 repo에 있어도 동작
+- 자동 커밋은 `compiled`/`success` 건수가 1 이상일 때만 호출 (변경 없는 dry-run/감지만 케이스 제외)
+- `ingest_text.py`: `raw/notes/` 서브디렉토리 신설 — articles(웹/유튜브)와 구분
+- `ingest_image.py`: 이미지 원본은 해시 기반 복사, 마크다운은 슬러그 기반 — 중복 이미지 재복사 방지
+- stdin 처리: `source == "-"` 분기에서 `sys.stdin.read()` — 파이프 사용 가능
+
+**주의:**
+- `wiki.auto_commit: false`로 비활성화 가능 (settings.yaml)
+- 이미지 캡션: `ingest.vision_caption: false`면 캡션 없이 이미지 경로만 마크다운에 삽입
+- `ingest -` (stdin)는 터미널에서 직접 실행 시 EOF(Ctrl+D) 입력 필요
+
+**다음:** Word 트랙변경 옵션(W1-09) 또는 SQLite 검색 인덱스
+
+---
+
 ## HO-036 | 2026-04-19 | CQ-05 — 상수 중앙화
 
 **완료:** `scripts/constants.py` 신규 생성 + 3개 파일 로컬 매핑 제거 + YouTube 언어 우선순위 settings.yaml 이관

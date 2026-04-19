@@ -256,6 +256,28 @@
 
 ---
 
+## Phase 8 — 기획서 미구현 항목 보완
+
+- [x] **W8-01** wiki/ 자동 git 커밋
+  - `scripts/wiki_git.py` — `auto_commit_wiki(wiki_root, message)` 함수
+  - `settings.yaml`에 `wiki.auto_commit: true/false` 옵션 추가
+  - `kb compile` 완료 후 wiki/ 변경 파일 자동 `git add` + `git commit`
+  - 커밋 메시지 형식: `kb: auto-compile YYYY-MM-DD HH:MM`
+  - git 미설치 또는 wiki/가 git repo 아닐 때 경고만 출력 (크래시 없음)
+
+- [x] **W1-07** 직접 텍스트 입력 인제스터
+  - `scripts/ingest_text.py` — `ingest_text(text, title, ...)` 함수
+  - `kb ingest --text "내용"` 또는 `kb ingest -` (stdin 파이프)
+  - 출력: `raw/notes/{날짜}_{슬러그}.md` + `.meta.yaml`
+  - frontmatter: `source: inline`, `collected_at`, `title`
+
+- [x] **W1-08** 로컬 이미지 파일 인제스터
+  - 이미지 파일(`.jpg/.png/.gif/.webp`) → Vision API 캡션 생성 → 마크다운 저장
+  - 출력: `raw/images/{날짜}_{슬러그}.md` (이미지 경로 + 캡션 포함)
+  - `cli.py` ingest 라우팅에 이미지 확장자 분기 추가
+
+---
+
 ## 현재 진행 상태
 
 - [x] **W1-04b** PowerPoint 인제스터 — 멀티모달 2-패스 업그레이드
@@ -283,6 +305,6 @@
 ---
 
 **마지막 업데이트:** 2026-04-19
-**현재 단계:** CQ-05 완료
+**현재 단계:** W8-01 / W1-07 / W1-08 완료
 **블로킹 이슈:** 없음
-**다음 태스크:** 없음 (Phase 7 코드 품질 전체 완료)
+**다음 태스크:** 기획서 잔여 항목 (Word 트랙변경 옵션, SQLite 검색 인덱스) 또는 신규 기획

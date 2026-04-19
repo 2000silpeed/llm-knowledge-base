@@ -93,6 +93,9 @@ vision_llm:
   model: gemma3:4b               # 멀티모달 지원 모델 (llava, gemma3, 등)
   base_url: http://localhost:11434
 
+wiki:
+  auto_commit: true   # 컴파일 완료 후 wiki/ 변경 파일 자동 git commit (git repo 필요)
+
 cache:
   enabled: true       # LLM 응답 캐싱 활성화 (동일 입력 → API 미호출 → 비용 절감)
   ttl_days: 0         # 캐시 유효 기간 (일). 0 = 영구 보존, 30 = 30일 후 만료

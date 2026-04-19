@@ -170,12 +170,42 @@ def _load_team_paths(settings: dict) -> tuple[Path, Path]:
 
 @app.command()
 def ingest(
-    source: str = typer.Argument(..., help="인제스트할 파일 경로 또는 URL"),
+    source: str = typer.Argument(
+        "-",
+        help="인제스트할 파일 경로, URL, 또는 '-' (stdin 파이프)",
+    ),
+    text: Optional[str] = typer.Option(
+        None, "--text", "-t",
+        help="직접 텍스트 입력 (파일/URL 대신 사용)",
+    ),
+    title: Optional[str] = typer.Option(
+        None, "--title",
+        help="--text 사용 시 문서 제목 (생략 시 첫 줄에서 자동 추출)",
+    ),
     force: bool = typer.Option(False, "--force", help="이미 등록된 문서도 강제로 재작성"),
     skip_existing: bool = typer.Option(False, "--skip-existing", help="이미 등록된 문서는 건너뜀"),
 ) -> None:
-    """파일 또는 URL을 raw/ 디렉토리에 인제스트합니다."""
+    """파일, URL, 또는 직접 텍스트를 raw/ 디렉토리에 인제스트합니다.
+
+    \b
+    예시:
+      kb ingest https://example.com/article
+      kb ingest paper.pdf
+      kb ingest --text "오늘 배운 것: ..."
+      echo "내용" | kb ingest -
+    """
     settings = _load_settings_safe()
+
+    # ── 직접 텍스트 입력 처리 ──
+    if text is not None or source == "-":
+        if source == "-":
+            text = sys.stdin.read()
+        from scripts.ingest_text import ingest_text
+        with Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True, console=console) as p:
+            p.add_task("텍스트 인제스트 중...", total=None)
+            result = ingest_text(text, title=title or "", project_root=_PROJECT_ROOT, settings=settings)
+        _print_ingest_result(result, title or "inline text")
+        return
 
     # ── 중복 인제스트 감지 ──
     # YouTube·GitHub는 저장 경로가 달라 articles/ 스캔으로 감지 불가 → 건너뜀
@@ -250,10 +280,14 @@ def ingest(
             elif suffix in (".md", ".txt"):
                 # 마크다운/텍스트는 raw/articles/ 에 직접 복사
                 result = _ingest_plain_file(path, settings)
+            elif suffix in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+                from scripts.ingest_image import ingest_image
+                result = ingest_image(path, project_root=_PROJECT_ROOT, settings=settings)
             else:
                 err_console.print(
                     f"[bold red]오류:[/] 지원하지 않는 파일 형식입니다: {suffix}\n"
-                    "지원 형식: .pdf, .xlsx, .xls, .xlsm, .pptx, .docx, .md, .txt, URL, YouTube URL, GitHub URL"
+                    "지원 형식: .pdf, .xlsx, .xls, .xlsm, .pptx, .docx, .md, .txt, "
+                    ".jpg, .jpeg, .png, .gif, .webp, URL, YouTube URL, GitHub URL"
                 )
                 raise typer.Exit(code=1)
 
@@ -606,6 +640,24 @@ def compile(
         _compile_changed(settings, dry_run, not no_index, max_workers)
 
 
+def _auto_commit_wiki(settings: dict) -> None:
+    """wiki/ 변경 파일을 자동 git commit합니다 (wiki.auto_commit=true 일 때)."""
+    from datetime import datetime, timezone
+    from scripts.wiki_git import auto_commit_wiki
+
+    _, wiki_dir = _load_team_paths(settings)
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+    result = auto_commit_wiki(wiki_dir, message=f"kb: auto-compile {ts}", settings=settings)
+
+    if result["status"] == "ok":
+        n = result["committed"]
+        h = result["commit_hash"]
+        console.print(f"[dim]wiki git 커밋: {h} ({n}개 파일)[/]")
+    elif result["status"] == "error":
+        console.print(f"[yellow]wiki git 커밋 실패 (무시):[/] {result['message']}")
+    # skipped는 조용히 처리
+
+
 def _compile_single(file_path: str, settings: dict, update_index: bool, max_workers: int) -> None:
     path = Path(file_path)
     if not path.exists():
@@ -638,6 +690,7 @@ def _compile_single(file_path: str, settings: dict, update_index: bool, max_work
         )
 
     _print_compile_result_p5(result)
+    _auto_commit_wiki(settings)
 
 
 def _compile_all(
@@ -698,6 +751,9 @@ def _compile_all(
             "[yellow]일부 파일 실패. --resume 플래그로 재시작하면 완료된 파일을 건너뜁니다.[/]"
         )
 
+    if success:
+        _auto_commit_wiki(settings)
+
 
 def _compile_changed(settings: dict, dry_run: bool, update_index: bool, max_workers: int) -> None:
     from scripts.incremental import compile_changed as _cc
@@ -748,6 +804,9 @@ def _compile_changed(settings: dict, dry_run: bool, update_index: bool, max_work
     console.print(f"\n[bold]완료:[/] {' / '.join(summary_parts)}")
     if conflicts:
         console.print(f"  [yellow]충돌 기록:[/] wiki/conflicts/ 확인 필요")
+
+    if compiled and not dry_run:
+        _auto_commit_wiki(settings)
 
 
 def _print_compile_result(result: dict) -> None:
