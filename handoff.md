@@ -5,6 +5,35 @@
 
 ---
 
+## HO-038 | 2026-04-19 | W1-09 — Word 트랙변경 내역 포함 옵션
+
+**완료:** `ingest_word()` + CLI에 트랙변경 파싱 옵션 추가
+
+- `scripts/ingest_word.py`
+  - `_runs_to_text_with_changes(para)` 신규 — XML 직접 파싱
+    - `w:r` 일반 런: 볼드/이탤릭 처리 (기존과 동일)
+    - `w:ins` 삽입: `++텍스트++` 표시
+    - `w:del` 삭제: `w:delText` 추출 → `~~텍스트~~` 표시
+  - `_para_to_markdown(include_tracked_changes=False)` 파라미터 추가
+  - `_doc_to_blocks(include_tracked_changes=False)` 파라미터 추가
+  - `ingest_word(include_tracked_changes=False)` 파라미터 추가
+  - frontmatter에 `tracked_changes: true` 기록 (옵션 활성화 시)
+- `scripts/cli.py` — `ingest` 커맨드에 `--track-changes` 옵션 추가
+
+**결정사항:**
+- 기본값 `False` — 기존 동작 유지 (트랙변경 무시)
+- `++text++` / `~~text~~` 표기: GitHub Flavored Markdown 인식, Obsidian도 지원
+- `w:rPrChange` (서식 변경) 은 지원하지 않음 — 텍스트 내용 변경만 처리
+- python-docx의 `para.runs`는 현재 상태(수락 후)만 반환 → XML 직접 파싱 필요
+
+**주의:**
+- `.doc` (구형 바이너리) 미지원 — 기존과 동일
+- 삭제 텍스트는 `w:delText` 태그 사용 (일반 `w:t`와 다름)
+
+**다음:** SQLite 검색 인덱스 또는 신규 기획
+
+---
+
 ## HO-037 | 2026-04-19 | W8-01 / W1-07 / W1-08 — 기획서 미구현 항목 3종
 
 **완료:** wiki 자동 git 커밋 + 텍스트 직접 입력 + 이미지 파일 인제스터 구현

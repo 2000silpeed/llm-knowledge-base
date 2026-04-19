@@ -131,8 +131,58 @@ def _find_note_refs(para, footnote_map: dict[str, str], endnote_map: dict[str, s
     return "".join(markers)
 
 
+def _runs_to_text_with_changes(para) -> str:
+    """트랙변경 정보(삽입/삭제)를 포함해 단락 런을 변환합니다.
+
+    - w:ins  (삽입): ++텍스트++ 로 표시
+    - w:del  (삭제): ~~텍스트~~ 로 표시
+    - 일반 런: 볼드/이탤릭 처리
+    """
+    from docx.oxml.ns import qn
+
+    parts: list[str] = []
+    body = para._element
+
+    for child in body:
+        tag = child.tag
+
+        # 일반 런
+        if tag == qn("w:r"):
+            texts = [t.text or "" for t in child.iter(qn("w:t"))]
+            text = "".join(texts)
+            if not text:
+                continue
+            # 볼드/이탤릭 감지
+            rpr = child.find(qn("w:rPr"))
+            bold = rpr is not None and rpr.find(qn("w:b")) is not None
+            italic = rpr is not None and rpr.find(qn("w:i")) is not None
+            if bold and italic:
+                text = f"***{text}***"
+            elif bold:
+                text = f"**{text}**"
+            elif italic:
+                text = f"*{text}*"
+            parts.append(text)
+
+        # 삽입 (tracked insertion)
+        elif tag == qn("w:ins"):
+            texts = [t.text or "" for t in child.iter(qn("w:t"))]
+            text = "".join(texts)
+            if text:
+                parts.append(f"++{text}++")
+
+        # 삭제 (tracked deletion) — w:delText 사용
+        elif tag == qn("w:del"):
+            texts = [t.text or "" for t in child.iter(qn("w:delText"))]
+            text = "".join(texts)
+            if text:
+                parts.append(f"~~{text}~~")
+
+    return "".join(parts)
+
+
 def _para_to_markdown(para, footnote_map: dict[str, str], endnote_map: dict[str, str],
-                      ref_counter: dict) -> str:
+                      ref_counter: dict, include_tracked_changes: bool = False) -> str:
     """단락 하나를 마크다운 줄로 변환합니다. 빈 단락은 빈 문자열 반환."""
     style_name = (para.style.name or "Normal").lower() if para.style else "normal"
 
@@ -143,14 +193,19 @@ def _para_to_markdown(para, footnote_map: dict[str, str], endnote_map: dict[str,
             return f"{HEADING_STYLE_MAP[style_name]} {text}"
         return ""
 
-    # 빈 단락
+    # 빈 단락 (트랙변경 포함 시 삭제 텍스트가 있을 수 있으므로 raw_text만으로 판단)
     raw_text = para.text.strip()
-    if not raw_text:
+    if not raw_text and not include_tracked_changes:
         return ""
 
     # 런 기반 텍스트
-    inline_text = _runs_to_text(para)
+    if include_tracked_changes:
+        inline_text = _runs_to_text_with_changes(para)
+    else:
+        inline_text = _runs_to_text(para)
     if not inline_text.strip():
+        if not raw_text:
+            return ""
         inline_text = raw_text  # fallback
 
     # 각주/미주 참조 마커
@@ -198,7 +253,7 @@ def _table_to_markdown(table) -> str:
 # ──────────────────────────────────────────────
 
 def _doc_to_blocks(doc, footnote_map: dict[str, str], endnote_map: dict[str, str],
-                   ref_counter: dict) -> list[str]:
+                   ref_counter: dict, include_tracked_changes: bool = False) -> list[str]:
     """문서 body의 단락과 표를 순서대로 마크다운 블록으로 변환합니다."""
     from docx.oxml.ns import qn
     from docx.table import Table
@@ -211,7 +266,10 @@ def _doc_to_blocks(doc, footnote_map: dict[str, str], endnote_map: dict[str, str
         tag = child.tag
         if tag == qn("w:p"):
             para = Paragraph(child, doc)
-            line = _para_to_markdown(para, footnote_map, endnote_map, ref_counter)
+            line = _para_to_markdown(
+                para, footnote_map, endnote_map, ref_counter,
+                include_tracked_changes=include_tracked_changes,
+            )
             blocks.append(line)
         elif tag == qn("w:tbl"):
             table = Table(child, doc)
@@ -357,6 +415,7 @@ def ingest_word(
     docx_path: str | Path,
     project_root: Path | str | None = None,
     settings: dict | None = None,
+    include_tracked_changes: bool = False,
 ) -> dict:
     """Word 파일(.docx)을 인제스트합니다.
 
@@ -364,6 +423,7 @@ def ingest_word(
         docx_path: Word 파일 경로
         project_root: 프로젝트 루트 경로. None이면 이 파일 기준 상위 디렉토리.
         settings: 설정 dict. None이면 settings.yaml 자동 로드.
+        include_tracked_changes: True이면 삽입(++text++)/삭제(~~text~~) 표시 포함.
 
     Returns:
         {
@@ -442,7 +502,10 @@ def ingest_word(
     ref_counter: dict = {"next": 1, "id_to_num": {}}
 
     # 문서 블록 변환
-    blocks = _doc_to_blocks(doc, footnote_map, endnote_map, ref_counter)
+    blocks = _doc_to_blocks(
+        doc, footnote_map, endnote_map, ref_counter,
+        include_tracked_changes=include_tracked_changes,
+    )
 
     # 연속된 빈 줄 정리 (최대 1개 빈 줄)
     body_lines: list[str] = []
@@ -494,6 +557,8 @@ def ingest_word(
         "chunk_count": chunk_count,
         "token_count": token_count,
     }
+    if include_tracked_changes:
+        frontmatter["tracked_changes"] = True
     fm_str = yaml.dump(frontmatter, allow_unicode=True, default_flow_style=False, sort_keys=False)
     document = f"---\n{fm_str}---\n\n# {title}\n\n{body_with_chunks}\n"
 

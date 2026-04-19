@@ -182,6 +182,10 @@ def ingest(
         None, "--title",
         help="--text 사용 시 문서 제목 (생략 시 첫 줄에서 자동 추출)",
     ),
+    track_changes: bool = typer.Option(
+        False, "--track-changes",
+        help="Word 파일의 트랙변경 내역 포함 (삽입: ++text++, 삭제: ~~text~~)",
+    ),
     force: bool = typer.Option(False, "--force", help="이미 등록된 문서도 강제로 재작성"),
     skip_existing: bool = typer.Option(False, "--skip-existing", help="이미 등록된 문서는 건너뜀"),
 ) -> None:
@@ -276,7 +280,10 @@ def ingest(
                 result = ingest_ppt(path, project_root=_PROJECT_ROOT, settings=settings)
             elif suffix in (".docx",):
                 from scripts.ingest_word import ingest_word
-                result = ingest_word(path, project_root=_PROJECT_ROOT, settings=settings)
+                result = ingest_word(
+                    path, project_root=_PROJECT_ROOT, settings=settings,
+                    include_tracked_changes=track_changes,
+                )
             elif suffix in (".md", ".txt"):
                 # 마크다운/텍스트는 raw/articles/ 에 직접 복사
                 result = _ingest_plain_file(path, settings)

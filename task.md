@@ -271,6 +271,12 @@
   - 출력: `raw/notes/{날짜}_{슬러그}.md` + `.meta.yaml`
   - frontmatter: `source: inline`, `collected_at`, `title`
 
+- [x] **W1-09** Word 트랙변경 내역 포함 옵션
+  - `ingest_word(include_tracked_changes=False)` 파라미터 추가
+  - `w:ins` → `++삽입 텍스트++` / `w:del` → `~~삭제 텍스트~~` 마크다운 변환
+  - `kb ingest --track-changes file.docx` CLI 옵션 추가
+  - frontmatter에 `tracked_changes: true` 기록
+
 - [x] **W1-08** 로컬 이미지 파일 인제스터
   - 이미지 파일(`.jpg/.png/.gif/.webp`) → Vision API 캡션 생성 → 마크다운 저장
   - 출력: `raw/images/{날짜}_{슬러그}.md` (이미지 경로 + 캡션 포함)
@@ -305,6 +311,6 @@
 ---
 
 **마지막 업데이트:** 2026-04-19
-**현재 단계:** W8-01 / W1-07 / W1-08 완료
+**현재 단계:** W1-09 완료
 **블로킹 이슈:** 없음
-**다음 태스크:** 기획서 잔여 항목 (Word 트랙변경 옵션, SQLite 검색 인덱스) 또는 신규 기획
+**다음 태스크:** SQLite 검색 인덱스 (기획서 §4.3 Phase 2) 또는 신규 기획
