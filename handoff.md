@@ -5,6 +5,44 @@
 
 ---
 
+## HO-042 | 2026-04-19 | O6~O7 — 쿼리 강화 + MCP 서버
+
+**완료:**
+
+O6 — `scripts/query.py` 온톨로지 컨텍스트 주입
+- `build_ontology_context(question, wiki_root, db_path, max_concepts, token_budget)` 신규
+  - `_communities.json` 로드 → 키워드 점수로 관련 커뮤니티 선별 (Priority 0)
+  - 그래프 DB에서 질의 관련 상위 N개 개념의 계층/인과/모순 정보 추출
+  - wiki 컨텍스트 앞에 온톨로지 블록 삽입
+- `query()` 에 `use_ontology: bool = True` 파라미터 추가
+  - 온톨로지 예산: 전체의 15% (최소 1000 / 최대 8000 토큰)
+  - 결과 dict에 `ontology_stats` 키 추가
+- `config/settings.yaml` — `ontology.query_inject`, `budget_ratio`, `max_concepts` 옵션 추가
+- `scripts/cli.py` — `kb query --no-ontology` 플래그 추가, verbose 출력에 온톨로지 통계 추가
+
+O7 — `scripts/mcp_server.py` MCP 서버 신규
+- JSON-RPC 2.0 over stdio (newline-delimited)
+- MCP Protocol Version: 2024-11-05
+- 6개 도구: search_concepts / get_concept / get_hierarchy / get_causal_chain / get_community_summary / query_knowledge
+- `scripts/cli.py` — `kb mcp serve` + `kb mcp config` 명령어 추가
+  - `kb mcp config --host claude-desktop` : Claude Desktop 설정 스니펫 출력
+  - `kb mcp config --host vscode` : VS Code 설정 스니펫 출력
+
+**결정사항:**
+- 온톨로지 컨텍스트는 wiki 컨텍스트와 분리된 별도 예산 사용 (토큰 경합 방지)
+- `_communities.json` 없거나 DB 없어도 graceful fallback (온톨로지 블록 생략)
+- MCP 서버 로그는 반드시 stderr 사용 (stdout은 JSON-RPC 통신 전용)
+- `query_knowledge` 도구는 기존 `query()` 함수를 그대로 호출 (온톨로지 주입 포함)
+
+**주의:**
+- O6: `kuzu` 미설치 환경에서도 동작 (try/except 가드, 온톨로지 블록만 생략)
+- O7: `kb mcp serve` 는 대화형 CLI가 아님 — stdout 출력 없이 stdin 루프 진입
+- `query_knowledge` 도구 호출 시 LLM API 비용 발생 (kb query와 동일)
+
+**다음:** Phase O 전체 완료. 실사용 테스트 또는 신규 기획.
+
+---
+
 ## HO-041 | 2026-04-19 | O5 — 분석 엔진 (6개 분석공간)
 
 **완료:** `scripts/ontology_analyzer.py` + CLI `kb graph analyze`

@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import json
 import re as _re
 import sys
 import unicodedata as _ud
@@ -37,8 +38,10 @@ err_console = Console(stderr=True, style="bold red")
 # ── 서브앱 ─────────────────────────────────────────────────────────────────
 graph_app = typer.Typer(name="graph", help="Kuzu 그래프 DB 관리", no_args_is_help=True, add_completion=False)
 ontology_app = typer.Typer(name="ontology", help="온톨로지 추출 관리", no_args_is_help=True, add_completion=False)
+mcp_app = typer.Typer(name="mcp", help="MCP 서버 (외부 AI 도구화, O7)", no_args_is_help=True, add_completion=False)
 app.add_typer(graph_app, name="graph")
 app.add_typer(ontology_app, name="ontology")
+app.add_typer(mcp_app, name="mcp")
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1124,14 +1127,15 @@ def query(
     question: str = typer.Argument(..., help='질문 (예: "딥러닝 기초가 뭐야?")'),
     save: bool = typer.Option(False, "--save", "-s", help="답변을 wiki/explorations/에 저장"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="컨텍스트 통계 출력"),
+    no_ontology: bool = typer.Option(False, "--no-ontology", help="온톨로지 컨텍스트 주입 비활성화"),
 ) -> None:
-    """wiki를 컨텍스트로 삼아 LLM에 질문합니다."""
+    """wiki를 컨텍스트로 삼아 LLM에 질문합니다. (온톨로지 컨텍스트 자동 주입 포함)"""
     settings = _load_settings_safe()
 
     with Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True, console=console) as p:
         p.add_task("질의 처리 중...", total=None)
         from scripts.query import query as _query
-        result = _query(question, settings=settings, save=save)
+        result = _query(question, settings=settings, save=save, use_ontology=not no_ontology)
 
     # 답변 출력
     answer = result.get("answer", "")
@@ -1150,6 +1154,12 @@ def query(
     if fallback > 0:
         fallback_labels = {1: "첫단락 압축", 2: "summaries 전용", 3: "질문 분해"}
         meta_lines.append(f"Fallback: [yellow]{fallback}단계[/] ({fallback_labels.get(fallback, '')})")
+    if result.get("ontology_stats"):
+        os_meta = result["ontology_stats"]
+        n_comm = len(os_meta.get("communities_matched", []))
+        n_exp = len(os_meta.get("concepts_expanded", []))
+        if n_comm or n_exp:
+            meta_lines.append(f"온톨로지: [magenta]커뮤니티 {n_comm}개 / 개념 확장 {n_exp}개[/]")
     if save and result.get("exploration"):
         exp = result["exploration"]
         meta_lines.append(f"저장됨: [dim]{exp.get('exploration_path', '')}[/]")
@@ -1167,6 +1177,13 @@ def query(
         for key, val in stats.items():
             t.add_row(key, str(val))
         console.print(t)
+
+        if result.get("ontology_stats"):
+            os_meta = result["ontology_stats"]
+            console.print("\n[bold]온톨로지 컨텍스트 (O6):[/]")
+            console.print(f"  커뮤니티: {os_meta.get('communities_matched', [])}")
+            console.print(f"  개념 확장: {os_meta.get('concepts_expanded', [])}")
+            console.print(f"  토큰: {os_meta.get('tokens_used', 0):,}")
 
         if used_files:
             console.print("\n[bold]포함된 파일:[/]")
@@ -2409,6 +2426,79 @@ def api_webhook_del(
     else:
         err_console.print(f"[bold red]오류:[/] ID '{webhook_id}' Webhook을 찾을 수 없습니다.")
         raise typer.Exit(code=1)
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# mcp — MCP 서버 (O7)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@mcp_app.command("serve")
+def mcp_serve() -> None:
+    """MCP 서버를 stdio transport로 시작합니다 (Claude Desktop / MCP 호스트용).
+
+    이 명령어는 JSON-RPC 2.0 over stdio 프로토콜을 사용합니다.
+    직접 실행하지 않고 Claude Desktop의 mcp_servers.json에 등록해 사용합니다.
+    """
+    import sys
+    project_root = Path(__file__).parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
+    from scripts.mcp_server import serve
+    console.print(
+        "[bold yellow]KB MCP 서버 시작[/] — stdio transport\n"
+        "[dim]이 프로세스는 MCP 호스트(Claude Desktop 등)가 관리합니다.[/]",
+        file=sys.stderr,
+    )
+    serve()
+
+
+@mcp_app.command("config")
+def mcp_config(
+    host: str = typer.Option("claude-desktop", "--host", help="MCP 호스트 타입 (claude-desktop | vscode)"),
+) -> None:
+    """Claude Desktop 또는 VS Code용 MCP 설정 스니펫을 출력합니다."""
+    import shutil
+
+    project_root = Path(__file__).parent.parent
+    python_path = shutil.which("python3") or shutil.which("python") or "python3"
+
+    if host == "vscode":
+        config = {
+            "servers": {
+                "kb": {
+                    "type": "stdio",
+                    "command": python_path,
+                    "args": ["-m", "scripts.mcp_server"],
+                    "cwd": str(project_root),
+                }
+            }
+        }
+        config_path = "~/.vscode/settings.json  (또는 .vscode/mcp.json)"
+    else:
+        config = {
+            "mcpServers": {
+                "kb": {
+                    "command": python_path,
+                    "args": ["-m", "scripts.mcp_server"],
+                    "cwd": str(project_root),
+                }
+            }
+        }
+        config_path = "~/Library/Application Support/Claude/claude_desktop_config.json"
+
+    snippet = json.dumps(config, ensure_ascii=False, indent=2)
+    console.print(
+        Panel(
+            f"[bold]설정 파일 위치:[/] [dim]{config_path}[/]\n\n"
+            f"[bold]추가할 내용:[/]\n\n[green]{snippet}[/]",
+            title=f"[bold]KB MCP 설정 — {host}[/]",
+            expand=False,
+        )
+    )
+    console.print("\n[dim]설정 후 Claude Desktop을 재시작하세요.[/]")
+    console.print("[dim]제공 도구: search_concepts / get_concept / get_hierarchy / "
+                  "get_causal_chain / get_community_summary / query_knowledge[/]")
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

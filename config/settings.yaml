@@ -98,6 +98,9 @@ wiki:
 
 ontology:
   auto_load: false    # 컴파일 완료 후 Kuzu 그래프 자동 적재 (kb graph init 후 true로 설정)
+  query_inject: true  # kb query 시 온톨로지 컨텍스트 자동 주입 (O6)
+  budget_ratio: 0.15  # 온톨로지 컨텍스트에 할당할 토큰 비율 (전체의 15%)
+  max_concepts: 3     # 질의당 그래프 확장할 최대 개념 수
 
 cache:
   enabled: true       # LLM 응답 캐싱 활성화 (동일 입력 → API 미호출 → 비용 절감)

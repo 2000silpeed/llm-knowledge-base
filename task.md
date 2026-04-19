@@ -334,12 +334,12 @@
   - `wiki/_communities.json` — 커뮤니티 요약 사전 생성
   - `kb graph analyze`
 
-- [ ] **O6** 쿼리 엔진 강화 (내부 활용)
+- [x] **O6** 쿼리 엔진 강화 (내부 활용)
   - 기존 `kb query` 파이프라인에 온톨로지 컨텍스트 주입
   - 질의 → 온톨로지 1~2홉 확장 → 관련 개념 자동 보강
-  - 커뮤니티 요약을 Priority 1 컨텍스트로 활용
+  - 커뮤니티 요약을 Priority 0 컨텍스트로 활용
 
-- [ ] **O7** MCP 서버 (외부 AI 도구화)
+- [x] **O7** MCP 서버 (외부 AI 도구화)
   - `scripts/mcp_server.py` — MCP 프로토콜 (stdio transport)
   - Tools:
     - `search_concepts(query)` — FTS5 검색
@@ -349,7 +349,7 @@
     - `get_community_summary(concept)` — 커뮤니티 요약
     - `query_knowledge(question)` — 기존 query 엔진 호출
   - `kb mcp serve` CLI
-  - `CLAUDE.md` / MCP 설정 파일 생성 안내
+  - `kb mcp config` — Claude Desktop / VS Code 설정 스니펫 출력
 
 ---
 
@@ -380,6 +380,6 @@
 ---
 
 **마지막 업데이트:** 2026-04-19
-**현재 단계:** P2-09 완료 (기획서 미구현 전체 완료)
+**현재 단계:** O6~O7 완료 (Phase O 전체 완료)
 **블로킹 이슈:** 없음
-**다음 태스크:** 신규 기획 또는 실사용 테스트
+**다음 태스크:** 실사용 테스트 또는 신규 기획
