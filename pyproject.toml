@@ -28,6 +28,8 @@ dependencies = [
     "youtube-transcript-api>=0.6.0",
     # 설정
     "pyyaml>=6.0.0",
+    # 온톨로지 그래프 DB (O2~O7)
+    "kuzu>=0.7.0",
     # 외부 연동 API (P3-04) — 선택적 (api 서버 미사용 시 생략 가능)
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",

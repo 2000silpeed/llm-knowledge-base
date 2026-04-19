@@ -5,6 +5,37 @@
 
 ---
 
+## HO-040 | 2026-04-19 | O1~O4 — 온톨로지 & 그래프 DB (Kuzu)
+
+**완료:** Phase O 1~4단계 구현
+
+- `config/ontology_schema.yaml` (O1) — 노드/엣지/ActionType/메타엣지 스키마 정의
+- `scripts/graph_db.py` (O2) — Kuzu 연결·스키마 init·seed·stats; DB 경로 `.kb_graph.db` (파일)
+- `scripts/ontology_extractor.py` (O3) — LLM 기반 triple 추출; 출력 `.kb_concepts/{slug}.triples.json`
+- `config/prompts.yaml` — `ontology_extract` 섹션 추가 (system+user 템플릿)
+- `scripts/graph_loader.py` (O4) — triple JSON → Kuzu MERGE; 증분/전체 재적재
+- `scripts/cli.py` — `graph_app`/`ontology_app` 서브앱 추가
+  - `kb graph init` / `kb graph load [--rebuild]` / `kb graph stats`
+  - `kb ontology extract [--all | --file]`
+  - `_auto_load_graph()` 훅 (compile 후 자동 적재, `ontology.auto_load=true` 시)
+- `config/settings.yaml` — `ontology.auto_load: false` 추가
+- `pyproject.toml` — `kuzu>=0.7.0` 추가
+
+**결정사항:**
+- Kuzu DB 경로: 디렉토리가 아닌 파일(`.kb_graph.db`) — Kuzu가 내부적으로 디렉토리 관리
+- MERGE 시 subject/object 양쪽 Concept 노드를 먼저 upsert 후 엣지 생성 (FK 오류 방지)
+- `changed_only`: DB mtime vs triple JSON mtime 비교로 증분 적재
+- `ontology.auto_load` 기본값 `false` — graph init 후 사용자가 직접 활성화
+
+**주의:**
+- BELONGS_TO는 object가 Domain 노드 → `_merge_concept` 대신 `MERGE (d:Domain)` 사용
+- `kb graph init` 먼저 실행 후 `kb graph load` 가능
+- kuzu 0.11.3 기준: `conn.execute(query, params_dict)` 형식
+
+**다음:** O5 — 분석 엔진 (6개 분석공간: hierarchy, causal, community, contradictions)
+
+---
+
 ## HO-039 | 2026-04-19 | P2-09 — SQLite FTS5 검색 인덱스
 
 **완료:** SQLite FTS5 검색 인덱스 구축 + 웹 UI 검색 API 교체

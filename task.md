@@ -293,6 +293,66 @@
 
 ---
 
+## Phase O — 온톨로지 & 지식 그래프 (Kuzu 기반)
+
+> **목표:** wiki 개념들을 formal triple로 구조화 → Kuzu 그래프 DB 저장 → AI가 추론 가능한 지식으로 승격
+> **스택:** Kuzu (임베디드 그래프 DB, Cypher) + MCP 서버 (외부 AI 도구화)
+
+- [x] **O1** 온톨로지 스키마 정의
+  - `config/ontology_schema.yaml` — 관계 타입, 노드 클래스, Action Type, 메타엣지 규칙 정의
+  - 관계 타입: `IS_A`, `PART_OF`, `ENABLES`, `REQUIRES`, `CONTRADICTS`, `EXEMPLIFIES`, `PRECEDES`, `CO_OCCURS`
+  - 노드 클래스: `Concept`, `Domain`, `ActionType`
+  - Action Type: AI가 개념에 대해 수행 가능한 동작 (`query`, `compare`, `apply`, `derive`, `summarize`)
+  - 메타엣지: 관계 제약 규칙 (`IS_A`이면 속성 상속 등)
+
+- [x] **O2** Kuzu 그래프 DB 초기화 + 스키마 마이그레이션
+  - `scripts/graph_db.py` — Kuzu 연결·스키마 생성·마이그레이션 유틸
+  - DB 경로: `.kb_graph/` (디렉토리, Kuzu 기본 형식)
+  - 노드 테이블: `Concept(name STRING PRIMARY KEY, summary TEXT, source_files TEXT, last_updated STRING)`
+  - 엣지 테이블: 관계 타입별 (`IS_A`, `PART_OF`, `ENABLES`, `REQUIRES`, `CONTRADICTS`, `EXEMPLIFIES`, `PRECEDES`, `CO_OCCURS`)
+  - `kb graph init` CLI
+
+- [x] **O3** 온톨로지 추출기
+  - `scripts/ontology_extractor.py` — wiki/concepts/ → LLM → (subject, predicate, object) triple 추출
+  - 기존 `related` frontmatter 업사이클 + 본문 심층 분석
+  - `config/prompts.yaml`에 `ontology_extract` 프롬프트 추가
+  - 출력: `.kb_concepts/{slug}.triples.json`
+  - `kb ontology extract [--all | --file]`
+
+- [x] **O4** 그래프 적재기
+  - `scripts/graph_loader.py` — `.triples.json` → Kuzu 노드·엣지 MERGE
+  - 증분 적재 (변경된 개념만 갱신)
+  - `kb graph load [--rebuild]`
+  - `kb compile` 후 자동 적재 훅
+
+- [ ] **O5** 분석 엔진 (6개 분석공간)
+  - `scripts/ontology_analyzer.py`
+  - `get_hierarchy(concept)` — 계층 공간 (`IS_A`, `PART_OF` 재귀 탐색)
+  - `get_causal_chain(concept)` — 인과 공간 (`ENABLES`, `REQUIRES` 체인)
+  - `get_community(concept)` — 구조 공간 (연결 클러스터, GraphRAG 방식)
+  - `get_contradictions(concept)` — 갈등 공간 (`CONTRADICTS` 탐색)
+  - `wiki/_communities.json` — 커뮤니티 요약 사전 생성
+  - `kb graph analyze`
+
+- [ ] **O6** 쿼리 엔진 강화 (내부 활용)
+  - 기존 `kb query` 파이프라인에 온톨로지 컨텍스트 주입
+  - 질의 → 온톨로지 1~2홉 확장 → 관련 개념 자동 보강
+  - 커뮤니티 요약을 Priority 1 컨텍스트로 활용
+
+- [ ] **O7** MCP 서버 (외부 AI 도구화)
+  - `scripts/mcp_server.py` — MCP 프로토콜 (stdio transport)
+  - Tools:
+    - `search_concepts(query)` — FTS5 검색
+    - `get_concept(name)` — 개념 상세 + triple
+    - `get_hierarchy(concept)` — 계층 탐색
+    - `get_causal_chain(concept)` — 인과 체인
+    - `get_community_summary(concept)` — 커뮤니티 요약
+    - `query_knowledge(question)` — 기존 query 엔진 호출
+  - `kb mcp serve` CLI
+  - `CLAUDE.md` / MCP 설정 파일 생성 안내
+
+---
+
 ## 현재 진행 상태
 
 - [x] **W1-04b** PowerPoint 인제스터 — 멀티모달 2-패스 업그레이드

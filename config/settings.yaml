@@ -96,6 +96,9 @@ vision_llm:
 wiki:
   auto_commit: true   # 컴파일 완료 후 wiki/ 변경 파일 자동 git commit (git repo 필요)
 
+ontology:
+  auto_load: false    # 컴파일 완료 후 Kuzu 그래프 자동 적재 (kb graph init 후 true로 설정)
+
 cache:
   enabled: true       # LLM 응답 캐싱 활성화 (동일 입력 → API 미호출 → 비용 절감)
   ttl_days: 0         # 캐시 유효 기간 (일). 0 = 영구 보존, 30 = 30일 후 만료

@@ -34,6 +34,12 @@ app = typer.Typer(
 console = Console()
 err_console = Console(stderr=True, style="bold red")
 
+# ── 서브앱 ─────────────────────────────────────────────────────────────────
+graph_app = typer.Typer(name="graph", help="Kuzu 그래프 DB 관리", no_args_is_help=True, add_completion=False)
+ontology_app = typer.Typer(name="ontology", help="온톨로지 추출 관리", no_args_is_help=True, add_completion=False)
+app.add_typer(graph_app, name="graph")
+app.add_typer(ontology_app, name="ontology")
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 헬퍼
@@ -681,6 +687,25 @@ def _auto_update_search_index(settings: dict) -> None:
         console.print(f"[yellow]검색 인덱스 갱신 실패 (무시):[/] {exc}")
 
 
+def _auto_load_graph(settings: dict) -> None:
+    """compile 후 온톨로지 그래프를 증분 적재합니다 (ontology.auto_load=true 일 때)."""
+    if not settings.get("ontology", {}).get("auto_load", False):
+        return
+
+    db_path = _PROJECT_ROOT / ".kb_graph.db"
+    if not db_path.exists():
+        return  # init 안 된 경우 조용히 건너뜀
+
+    try:
+        from scripts.graph_loader import load_all
+        result = load_all(db_path=db_path, changed_only=True)
+        n = result["loaded"]
+        if n > 0:
+            console.print(f"[dim]그래프 적재: {n}개 개념 갱신[/]")
+    except Exception as exc:
+        console.print(f"[yellow]그래프 적재 실패 (무시):[/] {exc}")
+
+
 def _compile_single(file_path: str, settings: dict, update_index: bool, max_workers: int) -> None:
     path = Path(file_path)
     if not path.exists():
@@ -714,6 +739,7 @@ def _compile_single(file_path: str, settings: dict, update_index: bool, max_work
 
     _print_compile_result_p5(result)
     _auto_update_search_index(settings)
+    _auto_load_graph(settings)
     _auto_commit_wiki(settings)
 
 
@@ -777,6 +803,7 @@ def _compile_all(
 
     if success:
         _auto_update_search_index(settings)
+        _auto_load_graph(settings)
         _auto_commit_wiki(settings)
 
 
@@ -832,6 +859,7 @@ def _compile_changed(settings: dict, dry_run: bool, update_index: bool, max_work
 
     if compiled and not dry_run:
         _auto_update_search_index(settings)
+        _auto_load_graph(settings)
         _auto_commit_wiki(settings)
 
 
@@ -1721,6 +1749,184 @@ def org_wiki_compile(
             expand=False,
         )
     )
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# graph — Kuzu 그래프 DB 관리 (O2, O4)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@graph_app.command(name="init")
+def graph_init() -> None:
+    """Kuzu 그래프 DB 스키마를 초기화합니다 (이미 존재하면 idempotent).
+
+    \b
+    예시:
+      kb graph init
+    """
+    from scripts.graph_db import get_connection, init_schema, seed_action_types
+
+    db_path = _PROJECT_ROOT / ".kb_graph.db"
+    console.print(f"[dim]그래프 DB 초기화 중: {db_path}[/]")
+
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True, console=console) as p:
+        p.add_task("스키마 초기화 중...", total=None)
+        conn = get_connection(db_path)
+        init_schema(conn)
+        seed_action_types(conn)
+
+    console.print(
+        Panel(
+            f"[bold green]✓ 그래프 DB 초기화 완료[/]\n\n"
+            f"  DB 경로: [dim]{db_path}[/]\n"
+            f"  노드 테이블: Concept, Domain, ActionType\n"
+            f"  엣지 테이블: IS_A, PART_OF, ENABLES, REQUIRES,\n"
+            f"               PRECEDES, EXEMPLIFIES, CO_OCCURS, CONTRADICTS,\n"
+            f"               BELONGS_TO, SUPPORTS_ACTION",
+            title="[bold]kb graph init[/]",
+            expand=False,
+        )
+    )
+
+
+@graph_app.command(name="load")
+def graph_load(
+    rebuild: bool = typer.Option(False, "--rebuild", "-r", help="기존 데이터 삭제 후 전체 재적재"),
+) -> None:
+    """온톨로지 triple JSON(.kb_concepts/)을 Kuzu 그래프 DB에 적재합니다.
+
+    \b
+    예시:
+      kb graph load            # 변경된 것만 적재
+      kb graph load --rebuild  # 전체 재적재
+    """
+    from scripts.graph_loader import load_all
+
+    db_path = _PROJECT_ROOT / ".kb_graph.db"
+    mode = "전체 재적재" if rebuild else "증분 적재"
+    console.print(f"[dim]그래프 {mode} 중...[/]")
+
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True, console=console) as p:
+        p.add_task(f"그래프 {mode} 중...", total=None)
+        result = load_all(db_path=db_path, rebuild=rebuild)
+
+    console.print(
+        Panel(
+            f"[bold green]✓ 그래프 적재 완료[/]\n\n"
+            f"  적재: [cyan]{result['loaded']}[/] 개념\n"
+            f"  건너뜀: [dim]{result['skipped']}[/]\n"
+            f"  오류: [red]{result['errors']}[/]\n"
+            f"  DB 경로: [dim]{db_path}[/]",
+            title="[bold]kb graph load[/]",
+            expand=False,
+        )
+    )
+
+
+@graph_app.command(name="stats")
+def graph_stats_cmd() -> None:
+    """그래프 DB 현황 통계를 출력합니다."""
+    from scripts.graph_db import get_connection, graph_stats
+
+    db_path = _PROJECT_ROOT / ".kb_graph.db"
+    if not db_path.exists():
+        err_console.print(f"그래프 DB 없음: {db_path}\n먼저 `kb graph init` 을 실행하세요.")
+        raise typer.Exit(code=1)
+
+    conn = get_connection(db_path)
+    stats = graph_stats(conn)
+
+    edges_text = "\n".join(
+        f"    {rel}: [cyan]{cnt}[/]"
+        for rel, cnt in stats.get("edges", {}).items()
+    )
+    console.print(
+        Panel(
+            f"[bold]노드[/]\n"
+            f"  Concept: [cyan]{stats['concepts']}[/]\n\n"
+            f"[bold]엣지[/]\n{edges_text}\n\n"
+            f"  총 엣지: [yellow]{stats['total_edges']}[/]",
+            title="[bold]kb graph stats[/]",
+            expand=False,
+        )
+    )
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ontology — 온톨로지 추출 관리 (O3)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@ontology_app.command(name="extract")
+def ontology_extract(
+    all_: bool = typer.Option(False, "--all", "-a", help="wiki/concepts/ 전체 처리"),
+    file: Optional[Path] = typer.Option(None, "--file", "-f", help="단일 concept 파일"),
+    changed_only: bool = typer.Option(True, "--changed-only/--no-changed-only",
+                                      help="변경된 파일만 처리 (--all 옵션과 함께 사용)"),
+    workers: int = typer.Option(4, "--workers", "-w", help="병렬 처리 쓰레드 수"),
+) -> None:
+    """wiki/concepts/ 파일에서 온톨로지 triple을 추출합니다.
+
+    \b
+    예시:
+      kb ontology extract --all
+      kb ontology extract --all --no-changed-only   # 강제 전체 재추출
+      kb ontology extract --file wiki/concepts/고객세분화.md
+    """
+    from scripts.ontology_extractor import extract_triples, extract_all_triples
+    from scripts.token_counter import load_settings
+
+    settings_path = _PROJECT_ROOT / "config" / "settings.yaml"
+    settings = load_settings(settings_path)
+    _, wiki_dir = _load_team_paths(settings)
+
+    if file is not None:
+        # 단일 파일 모드
+        target = Path(file) if not Path(file).is_absolute() else Path(file)
+        if not target.exists():
+            err_console.print(f"파일 없음: {target}")
+            raise typer.Exit(code=1)
+
+        console.print(f"[dim]추출 중: {target.name}[/]")
+        with Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True, console=console) as p:
+            p.add_task("triple 추출 중...", total=None)
+            result = extract_triples(target, settings=settings, wiki_root=wiki_dir)
+
+        console.print(
+            Panel(
+                f"[bold green]✓ 추출 완료[/]\n\n"
+                f"  개념: [cyan]{result['concept']}[/]\n"
+                f"  triple 수: [yellow]{len(result['triples'])}[/]\n"
+                f"  저장: [dim]{result.get('path', '-')}[/]",
+                title="[bold]kb ontology extract[/]",
+                expand=False,
+            )
+        )
+    elif all_:
+        # 전체 모드
+        mode = "변경된 파일만" if changed_only else "전체"
+        console.print(f"[dim]wiki/concepts/ {mode} triple 추출 중...[/]")
+
+        with Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True, console=console) as p:
+            p.add_task(f"triple 추출 중 ({mode})...", total=None)
+            result = extract_all_triples(
+                wiki_dir,
+                settings=settings,
+                changed_only=changed_only,
+                max_workers=workers,
+            )
+
+        console.print(
+            Panel(
+                f"[bold green]✓ 전체 추출 완료[/]\n\n"
+                f"  추출: [cyan]{result['extracted']}[/]\n"
+                f"  건너뜀: [dim]{result['skipped']}[/]\n"
+                f"  오류: [red]{result['errors']}[/]",
+                title="[bold]kb ontology extract --all[/]",
+                expand=False,
+            )
+        )
+    else:
+        err_console.print("--all 또는 --file 옵션이 필요합니다.")
+        raise typer.Exit(code=1)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
