@@ -5,6 +5,29 @@
 
 ---
 
+## HO-041 | 2026-04-19 | O5 — 분석 엔진 (6개 분석공간)
+
+**완료:** `scripts/ontology_analyzer.py` + CLI `kb graph analyze`
+
+- `get_hierarchy(conn, concept)` — IS_A/PART_OF 재귀, 부모/자식/조상 반환
+- `get_causal_chain(conn, concept)` — ENABLES/REQUIRES/PRECEDES 체인 + 역방향
+- `get_community(conn, concept)` — CO_OCCURS N홉 클러스터 + weight 내림차순 neighbors
+- `get_contradictions(conn, concept)` — CONTRADICTS 대칭 탐색 + reason
+- `get_exemplifications(conn, concept)` — EXEMPLIFIES 양방향
+- `analyze_concept(conn, concept)` — 5개 공간 일괄 반환
+- `build_community_summaries(conn, wiki_root)` — Union-Find 클러스터 감지 → LLM 요약 → `wiki/_communities.json`
+- `scripts/cli.py` — `kb graph analyze --concept <개념>` / `--communities`
+- `config/prompts.yaml` — `community_summary` 섹션 추가
+
+**결정사항:**
+- Union-Find로 CO_OCCURS 클러스터 구성 (별도 GraphRAG 라이브러리 불필요)
+- Kuzu 가변 길이 경로: `[:REL*1..N]` 문법 사용 (N≤5 제한)
+- CONTRADICTS는 대칭이므로 방향 없이 `-(r:CONTRADICTS)-` 매칭
+
+**다음:** O6 — 쿼리 엔진 강화 (kb query에 온톨로지 컨텍스트 주입)
+
+---
+
 ## HO-040 | 2026-04-19 | O1~O4 — 온톨로지 & 그래프 DB (Kuzu)
 
 **완료:** Phase O 1~4단계 구현

@@ -325,7 +325,7 @@
   - `kb graph load [--rebuild]`
   - `kb compile` 후 자동 적재 훅
 
-- [ ] **O5** 분석 엔진 (6개 분석공간)
+- [x] **O5** 분석 엔진 (6개 분석공간)
   - `scripts/ontology_analyzer.py`
   - `get_hierarchy(concept)` — 계층 공간 (`IS_A`, `PART_OF` 재귀 탐색)
   - `get_causal_chain(concept)` — 인과 공간 (`ENABLES`, `REQUIRES` 체인)

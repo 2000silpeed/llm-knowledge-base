@@ -1851,6 +1851,91 @@ def graph_stats_cmd() -> None:
     )
 
 
+@graph_app.command(name="analyze")
+def graph_analyze(
+    concept: Optional[str] = typer.Option(None, "--concept", "-c", help="분석할 개념명"),
+    communities: bool = typer.Option(False, "--communities", help="커뮤니티 요약 생성 (wiki/_communities.json)"),
+) -> None:
+    """그래프 DB에서 개념을 분석하거나 커뮤니티 요약을 생성합니다.
+
+    \b
+    예시:
+      kb graph analyze --concept 고객세분화
+      kb graph analyze --communities
+    """
+    from scripts.graph_db import get_connection
+    from scripts.ontology_analyzer import analyze_concept, build_community_summaries
+    from scripts.token_counter import load_settings
+
+    db_path = _PROJECT_ROOT / ".kb_graph.db"
+    if not db_path.exists():
+        err_console.print(f"그래프 DB 없음: {db_path}\n먼저 `kb graph init` 후 `kb graph load` 를 실행하세요.")
+        raise typer.Exit(code=1)
+
+    conn = get_connection(db_path)
+    settings = load_settings(_PROJECT_ROOT / "config" / "settings.yaml")
+    _, wiki_dir = _load_team_paths(settings)
+
+    if communities:
+        console.print("[dim]커뮤니티 요약 생성 중...[/]")
+        with Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True, console=console) as p:
+            p.add_task("커뮤니티 분석 + LLM 요약 중...", total=None)
+            result = build_community_summaries(conn, wiki_dir, settings=settings)
+
+        console.print(
+            Panel(
+                f"[bold green]✓ 커뮤니티 요약 완료[/]\n\n"
+                f"  커뮤니티 수: [cyan]{result['communities']}[/]\n"
+                f"  저장: [dim]{result.get('path', '-')}[/]",
+                title="[bold]kb graph analyze --communities[/]",
+                expand=False,
+            )
+        )
+        return
+
+    if not concept:
+        err_console.print("--concept 또는 --communities 옵션이 필요합니다.")
+        raise typer.Exit(code=1)
+
+    console.print(f"[dim]분석 중: {concept}[/]")
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True, console=console) as p:
+        p.add_task(f"{concept} 분석 중...", total=None)
+        result = analyze_concept(conn, concept)
+
+    h = result["hierarchy"]
+    c = result["causal"]
+    com = result["community"]
+    con = result["conflict"]
+    ex = result["exemplification"]
+
+    def _fmt_list(items: list, empty: str = "(없음)") -> str:
+        return ", ".join(str(i) for i in items) if items else empty
+
+    console.print(
+        Panel(
+            f"[bold]계층 공간[/]\n"
+            f"  IS_A 상위: {_fmt_list(h['is_a_parents'])}\n"
+            f"  PART_OF 상위: {_fmt_list(h['part_of_parents'])}\n"
+            f"  하위 개념: {_fmt_list(h['children'])}\n"
+            f"  구성 요소: {_fmt_list(h['parts'])}\n\n"
+            f"[bold]인과 공간[/]\n"
+            f"  가능하게 함(ENABLES): {_fmt_list(c['enables'])}\n"
+            f"  필요로 함(REQUIRES): {_fmt_list(c['requires'])}\n"
+            f"  이후 개념(PRECEDES): {_fmt_list(c['precedes'])}\n"
+            f"  이전 개념: {_fmt_list(c['preceded_by'])}\n\n"
+            f"[bold]구조 공간 (CO_OCCURS)[/]\n"
+            f"  클러스터: {_fmt_list(com['community'][:8])}\n\n"
+            f"[bold]갈등 공간[/]\n"
+            f"  상충 개념: {_fmt_list([x['name'] for x in con['contradicts']])}\n\n"
+            f"[bold]예시 공간[/]\n"
+            f"  예시하는 개념: {_fmt_list(ex['exemplifies'])}\n"
+            f"  구체적 사례: {_fmt_list(ex['exemplified_by'])}",
+            title=f"[bold]분석: {concept}[/]",
+            expand=False,
+        )
+    )
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # ontology — 온톨로지 추출 관리 (O3)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
