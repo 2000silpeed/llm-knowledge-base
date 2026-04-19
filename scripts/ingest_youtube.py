@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import logging
 import re
-import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -26,11 +25,9 @@ import requests
 import yaml
 
 from scripts.token_counter import load_settings
+from scripts.utils import slugify as _slugify
 
 logger = logging.getLogger(__name__)
-
-# 자막 언어 우선순위 (수동 자막 → 자동 생성 자막 순)
-_LANG_PRIORITY = ["ko", "en", "ja", "zh-Hans", "zh-Hant"]
 
 # 타임스탬프 섹션 간격 (초)
 _SECTION_INTERVAL = 120
@@ -72,14 +69,6 @@ def _fetch_metadata(video_id: str) -> dict:
         return {"title": f"YouTube Video {video_id}", "channel": "", "thumbnail_url": ""}
 
 
-def _slugify(text: str, max_len: int = 50) -> str:
-    """텍스트를 파일명용 슬러그로 변환합니다."""
-    text = unicodedata.normalize("NFKD", text)
-    text = re.sub(r"[^\w\s가-힣]", "", text, flags=re.UNICODE)
-    text = re.sub(r"\s+", "-", text.strip()).lower()
-    text = re.sub(r"-+", "-", text).strip("-")
-    return text[:max_len] if text else "youtube"
-
 
 def _seconds_to_hms(seconds: float) -> str:
     """초를 HH:MM:SS 형식으로 변환합니다."""
@@ -91,7 +80,10 @@ def _seconds_to_hms(seconds: float) -> str:
     return f"{m:02d}:{sec:02d}"
 
 
-def _fetch_transcript(video_id: str) -> tuple[list[dict], str, bool]:
+def _fetch_transcript(
+    video_id: str,
+    lang_priority: list[str],
+) -> tuple[list[dict], str, bool]:
     """자막을 가져옵니다.
 
     Returns:
@@ -112,7 +104,7 @@ def _fetch_transcript(video_id: str) -> tuple[list[dict], str, bool]:
         raise RuntimeError(f"자막 목록 조회 실패: {e}") from e
 
     # 1순위: 수동 자막 (우선순위 언어 순)
-    for lang in _LANG_PRIORITY:
+    for lang in lang_priority:
         try:
             t = transcript_list.find_manually_created_transcript([lang])
             segments = t.fetch()
@@ -121,7 +113,7 @@ def _fetch_transcript(video_id: str) -> tuple[list[dict], str, bool]:
             continue
 
     # 2순위: 자동 생성 자막 (우선순위 언어 순)
-    for lang in _LANG_PRIORITY:
+    for lang in lang_priority:
         try:
             t = transcript_list.find_generated_transcript([lang])
             segments = t.fetch()
@@ -233,10 +225,16 @@ def ingest_youtube(
     meta = _fetch_metadata(video_id)
     title = meta["title"]
 
+    # 언어 우선순위: settings.yaml → 하드코딩 기본값 순으로 fallback
+    lang_priority: list[str] = (
+        settings.get("ingest", {}).get("lang_priority")
+        or ["ko", "en", "ja", "zh-Hans", "zh-Hant"]
+    )
+
     # 자막 가져오기
     logger.info("자막 수집 중: %s", video_id)
     try:
-        segments, lang, is_generated = _fetch_transcript(video_id)
+        segments, lang, is_generated = _fetch_transcript(video_id, lang_priority)
     except RuntimeError as e:
         return {"status": "error", "message": str(e)}
 
@@ -251,7 +249,7 @@ def ingest_youtube(
     raw_dir.mkdir(parents=True, exist_ok=True)
 
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    slug = _slugify(title)
+    slug = _slugify(title, max_len=50) or "youtube"
     filename = f"{date_str}_yt_{slug}.md"
 
     # 파일명 충돌 처리

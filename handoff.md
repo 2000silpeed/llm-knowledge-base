@@ -5,6 +5,78 @@
 
 ---
 
+## HO-036 | 2026-04-19 | CQ-05 — 상수 중앙화
+
+**완료:** `scripts/constants.py` 신규 생성 + 3개 파일 로컬 매핑 제거 + YouTube 언어 우선순위 settings.yaml 이관
+
+- `scripts/constants.py` — `MIME_TO_EXT` (MIME→확장자), `EXT_TO_MIME` (확장자→MIME) 두 상수 정의
+- `ingest_web.py` — 인라인 `ext_map` 제거, `MIME_TO_EXT` import 사용
+- `ingest_pdf.py` — 인라인 `media_map` 제거, `EXT_TO_MIME` import 사용
+- `ingest_ppt.py` — 인라인 `media_map` 제거 (`bmp` 포함), `EXT_TO_MIME` import 사용
+- `config/settings.yaml` — `ingest.lang_priority: [ko, en, ja, zh-Hans, zh-Hant]` 추가
+- `ingest_youtube.py` — 모듈 레벨 `_LANG_PRIORITY` 상수 제거, `ingest_youtube()` 내에서 `settings["ingest"]["lang_priority"]` 로드 → `_fetch_transcript(video_id, lang_priority)` 전달
+
+**결정사항:**
+- `MIME_TO_EXT` / `EXT_TO_MIME` 두 방향 모두 `constants.py`에 공존 — 변환 방향이 달라 각자 독립 사용
+- `bmp` → `"image/png"` 처리: Vision API가 bmp 미지원, 주석으로 명시
+- YouTube `lang_priority` fallback: settings에 키가 없으면 기존 하드코딩 값(`["ko", "en", "ja", "zh-Hans", "zh-Hant"]`) 사용 → 구버전 settings.yaml 호환 유지
+- `_fetch_transcript` 시그니처에 `lang_priority` 인자 추가 (순수 함수 유지)
+
+**주의:**
+- `MIME_TO_EXT` default: 매핑에 없는 Content-Type → `.jpg` fallback (ingest_web 호출부)
+- `EXT_TO_MIME` default: 매핑에 없는 확장자 → `"image/png"` fallback (ingest_pdf/ppt 호출부)
+
+**다음:** Phase 7 (CQ) 전체 완료. 새 태스크 필요 시 기획서 검토 후 결정.
+
+---
+
+## HO-035 | 2026-04-19 | CQ-04 — render_template() / find_unique_path() 공통 모듈 통합
+
+**완료:** `scripts/utils.py`에 `render_template()`, `find_unique_path()` 추가 + 9+4개 파일 중복 제거
+
+- `render_template(template, variables)` → `scripts/utils.py` 추출
+  - 제거 대상 9개: `compile`, `query`, `concept_compiler`, `incremental`, `exploration`, `concept_normalizer`, `concept_extractor`, `index_updater`, `concept_graph`
+  - 각 파일: `from scripts.utils import render_template as _render` 추가, 로컬 정의 삭제
+- `find_unique_path(path)` → `scripts/utils.py` 추출
+  - 제거 대상 4곳 (numeric 접미사 루프): `compile`, `incremental`, `exploration`, `concept_compiler`
+  - hash 접미사 패턴 (`ingest_web/pdf/ppt/word/excel/github/youtube`)은 소스마다 hash 기준 달라 유지
+
+**결정사항:**
+- `render_template`로 공개 이름 지정, 각 파일에서 `as _render`로 import → 기존 호출부 변경 없음
+- `find_unique_path(path)` 시그니처: 입력 경로가 존재하지 않으면 그대로 반환, 존재하면 `_2`, `_3`... 순으로 탐색
+- `compile.py`의 "내용 동일 시 덮어쓰기" 로직은 wiki 파일 관리에 특화된 것 → `find_unique_path` 호출 전 별도 유지
+
+**주의:**
+- `concept_normalizer.py`에는 `_render_frontmatter`라는 별도 함수도 있음 — 이는 yaml→frontmatter 변환이므로 제거 대상 아님
+
+**다음:** CQ-05 (상수 중앙화 — MIME 매핑, 언어 우선순위)
+
+---
+
+## HO-034 | 2026-04-18 | CQ-03 — slugify() 공통 모듈 추출
+
+**완료:** `scripts/utils.py` 신규 생성 + 7개 ingest 파일 로컬 정의 제거
+
+- `scripts/utils.py` — `slugify(text, max_len=60, fallback="")` 단일 구현
+- 제거 대상: `ingest_web`, `ingest_pdf`, `ingest_ppt`, `ingest_word`, `ingest_excel`, `ingest_github`, `ingest_youtube` 각자의 `_slugify` 로컬 정의 전량 삭제
+- 각 파일 import 추가: `from scripts.utils import slugify as _slugify`
+- 호출자 호환: 기존 `_slugify(text)` 그대로 사용, `max_len` 기본값 다른 경우 명시 (`ingest_github`: `max_len=40`, `ingest_youtube`: `max_len=50`)
+- 버그 수정: NFKD → NFKC 변경 (NFKD가 한글 음절을 자모 U+1100~으로 분해하는 문제 수정)
+
+**결정사항:**
+- `NFKC` 선택: 전각 문자(ａ→a) 정규화 효과를 유지하면서 한글 음절 보존 (NFKD 후 NFC 재합성)
+- 공개 이름 `slugify` (밑줄 없음), 각 파일에서 `as _slugify`로 import → 기존 호출부 변경 없음
+- `ingest_web.py`의 fallback "article"은 `_slug_from_url(url)` + `or "article"` 로직으로 이미 처리 중 → 함수 시그니처 변경 없음
+- `utils.py`는 scripts 내 다른 모듈 미임포트 → circular import 없음
+
+**주의:**
+- 기존 NFKD 버그는 한글 파일명에서만 표면화됨 — 영문 파일명은 정상 동작했음
+- `ingest_github.py`의 원래 구현은 `[^\w\s-]` (한글 제외) 패턴이었으나, 통합 버전에서 `[^\w\s가-힣-]`로 통일 → GitHub 레포명에 한글 포함 시 보존됨 (실질 차이 없음)
+
+**다음:** CQ-04 (`_render()` / `find_unique_path()` 공통 모듈 통합)
+
+---
+
 ## HO-032 | 2026-04-17 | W1-04c — PPT Vision 캡션 재실행 기능
 
 **완료:** `scripts/ingest_ppt.py`에 `retry_vision_pass()` 및 헬퍼 3개 추가 + `kb retry-vision` CLI 명령어

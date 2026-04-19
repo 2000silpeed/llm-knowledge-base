@@ -78,6 +78,12 @@ ingest:
   image_download: true           # 외부 이미지 URL → 로컬 raw/images/ 저장 여부
   vision_caption: true           # 이미지 → Claude Vision API 캡션 자동 생성
   slide_render: true             # PPT 슬라이드 전체 이미지 렌더링 + Vision 분석 (LibreOffice 필요)
+  lang_priority:                 # YouTube 자막 언어 우선순위 (앞에서부터 시도)
+    - ko
+    - en
+    - ja
+    - zh-Hans
+    - zh-Hant
 
 # PPT 슬라이드 시각 분석 전용 Vision LLM
 # 없으면 기본 llm 설정 사용. Gemma 4 멀티모달 권장.

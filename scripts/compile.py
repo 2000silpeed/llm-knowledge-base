@@ -39,6 +39,7 @@ from scripts.token_counter import (
     load_settings,
     parse_frontmatter,
 )
+from scripts.utils import find_unique_path, render_template as _render
 
 logger = logging.getLogger(__name__)
 
@@ -56,15 +57,6 @@ def load_prompts(prompts_path: Path | str | None = None) -> dict:
         prompts_path = _DEFAULT_PROMPTS_PATH
     with Path(prompts_path).open(encoding="utf-8") as f:
         return yaml.safe_load(f)
-
-
-def _render(template: str, variables: dict) -> str:
-    """{{ variable }} 형식의 템플릿 변수를 치환합니다."""
-    def replace(m: re.Match) -> str:
-        key = m.group(1).strip()
-        return str(variables.get(key, m.group(0)))
-
-    return re.sub(r"\{\{\s*(\w+)\s*\}\}", replace, template)
 
 
 # ──────────────────────────────────────────────
@@ -126,10 +118,7 @@ def _save_wiki_entry(content: str, concept_name: str, wiki_dir: Path) -> Path:
             return out_path
 
         # 다른 파일이면 접미사 추가
-        idx = 2
-        while out_path.exists():
-            out_path = wiki_dir / f"{base_name}_{idx}.md"
-            idx += 1
+        out_path = find_unique_path(out_path)
 
     out_path.write_text(content, encoding="utf-8")
     logger.info("wiki 항목 저장: %s", out_path)

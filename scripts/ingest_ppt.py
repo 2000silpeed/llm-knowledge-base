@@ -26,26 +26,19 @@ import logging
 import re
 import subprocess
 import tempfile
-import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
 
+from scripts.constants import EXT_TO_MIME
 from scripts.token_counter import estimate_tokens, load_settings, parse_frontmatter
+from scripts.utils import slugify as _slugify
 
 logger = logging.getLogger(__name__)
 
 
-def _slugify(text: str, max_len: int = 60) -> str:
-    """텍스트를 파일명용 슬러그로 변환합니다."""
-    text = unicodedata.normalize("NFKD", text)
-    text = re.sub(r"[^\w\s가-힣]", "", text, flags=re.UNICODE)
-    text = re.sub(r"\s+", "-", text.strip())
-    text = text.lower()
-    text = re.sub(r"-+", "-", text).strip("-")
-    return text[:max_len] if text else "document"
 
 
 # ──────────────────────────────────────────────
@@ -133,12 +126,7 @@ def _generate_caption(image_bytes: bytes, ext: str, settings: dict) -> str:
     try:
         from scripts.llm import call_vision
 
-        media_map = {
-            "jpg": "image/jpeg", "jpeg": "image/jpeg",
-            "png": "image/png", "gif": "image/gif", "webp": "image/webp",
-            "bmp": "image/png",
-        }
-        media_type = media_map.get(ext.lower(), "image/png")
+        media_type = EXT_TO_MIME.get(ext.lower(), "image/png")
         prompt = (
             "이 프레젠테이션 슬라이드를 한 문장으로 간결하게 설명해주세요. "
             "차트·그래프·표가 있으면 핵심 수치와 결론을 포함하세요."

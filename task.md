@@ -241,6 +241,19 @@
   - `retry_vision_pass()` 직렬 for 루프 → `ThreadPoolExecutor(max_workers=4)` 병렬화
   - 기존 `_run_vision_pass()` 패턴과 통일
 
+- [x] **CQ-03** `slugify()` 공통 모듈 추출
+  - `scripts/utils.py` 신규 생성 — `slugify(text, max_len, fallback)` 단일 구현
+  - 7개 파일 로컬 `_slugify` 정의 전량 제거: `ingest_web`, `ingest_pdf`, `ingest_ppt`, `ingest_word`, `ingest_excel`, `ingest_github`, `ingest_youtube`
+  - NFKD → NFKC 수정 (한글 음절 자모 분해 버그 수정)
+
+- [x] **CQ-04** `_render()` / `find_unique_path()` 공통 모듈 통합
+  - `render_template()` → `scripts/utils.py` 추출, 9개 파일 로컬 정의 전량 제거: `compile`, `query`, `concept_compiler`, `incremental`, `exploration`, `concept_normalizer`, `concept_extractor`, `index_updater`, `concept_graph`
+  - `find_unique_path()` → `scripts/utils.py` 추출, numeric 접미사 루프 4곳 교체: `compile`, `incremental`, `exploration`, `concept_compiler`
+
+- [x] **CQ-05** 상수 중앙화
+  - MIME→확장자 매핑 (`ingest_web`, `ingest_pdf`, `ingest_ppt` 3곳 중복) → `scripts/constants.py`
+  - YouTube 언어 우선순위 → settings.yaml `ingest.lang_priority` 로드
+
 ---
 
 ## 현재 진행 상태
@@ -269,7 +282,7 @@
 
 ---
 
-**마지막 업데이트:** 2026-04-17
-**현재 단계:** W1-04c 완료
+**마지막 업데이트:** 2026-04-19
+**현재 단계:** CQ-05 완료
 **블로킹 이슈:** 없음
-**다음 태스크:** 실제 PPT 파일로 retry-vision 테스트 권장
+**다음 태스크:** 없음 (Phase 7 코드 품질 전체 완료)

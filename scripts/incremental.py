@@ -38,6 +38,7 @@ import yaml
 
 from scripts.compile import compile_document
 from scripts.token_counter import load_settings, parse_frontmatter
+from scripts.utils import find_unique_path, render_template as _render
 
 logger = logging.getLogger(__name__)
 
@@ -63,13 +64,6 @@ def _load_prompts(prompts_path: Path | str | None = None) -> dict:
     with Path(prompts_path).open(encoding="utf-8") as f:
         return yaml.safe_load(f)
 
-
-def _render(template: str, variables: dict) -> str:
-    """{{ variable }} 형식 템플릿 치환."""
-    def replace(m: re.Match) -> str:
-        key = m.group(1).strip()
-        return str(variables.get(key, m.group(0)))
-    return re.sub(r"\{\{\s*(\w+)\s*\}\}", replace, template)
 
 
 def _call_llm(system_prompt: str, user_prompt: str, settings: dict) -> str:
@@ -311,12 +305,7 @@ def save_conflict(
     base_name = f"{today}_{safe_wiki}_vs_{safe_source}"
     out_path = conflicts_dir / f"{base_name}.md"
 
-    # 중복 방지
-    idx = 2
-    while out_path.exists():
-        out_path = conflicts_dir / f"{base_name}_{idx}.md"
-        idx += 1
-
+    out_path = find_unique_path(out_path)
     out_path.write_text(conflict_text, encoding="utf-8")
     logger.warning("충돌 기록: %s", out_path)
     return out_path

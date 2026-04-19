@@ -21,7 +21,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -29,6 +28,7 @@ import requests
 import yaml
 
 from scripts.token_counter import load_settings, estimate_tokens
+from scripts.utils import slugify as _slugify
 
 logger = logging.getLogger(__name__)
 
@@ -190,13 +190,6 @@ def _fetch_file_content(
         logger.warning("파일 내용 조회 실패 (%s): %s", path, e)
         return None
 
-
-def _slugify(text: str, max_len: int = 40) -> str:
-    text = unicodedata.normalize("NFKD", text)
-    text = re.sub(r"[^\w\s-]", "", text, flags=re.UNICODE)
-    text = re.sub(r"[\s_]+", "-", text.strip()).lower()
-    text = re.sub(r"-+", "-", text).strip("-")
-    return text[:max_len] if text else "repo"
 
 
 def _ext_to_lang(ext: str) -> str:
@@ -373,7 +366,7 @@ def ingest_github(
     raw_dir.mkdir(parents=True, exist_ok=True)
 
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    slug = _slugify(f"{owner}-{repo}")
+    slug = _slugify(f"{owner}-{repo}", max_len=40) or "repo"
     filename = f"{date_str}_gh_{slug}.md"
     out_path = raw_dir / filename
 

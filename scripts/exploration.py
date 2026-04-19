@@ -34,6 +34,7 @@ import yaml
 
 from scripts.llm import call_llm as _call_llm
 from scripts.token_counter import load_settings
+from scripts.utils import find_unique_path, render_template as _render
 
 logger = logging.getLogger(__name__)
 
@@ -50,14 +51,6 @@ def _load_prompts(prompts_path: Optional[Path] = None) -> dict:
         prompts_path = _DEFAULT_PROMPTS_PATH
     with Path(prompts_path).open(encoding="utf-8") as f:
         return yaml.safe_load(f)
-
-
-def _render(template: str, variables: dict) -> str:
-    """{{ key }} 형식 템플릿 치환. 미등록 키는 원문 유지."""
-    def replace(m: re.Match) -> str:
-        key = m.group(1).strip()
-        return str(variables.get(key, m.group(0)))
-    return re.sub(r"\{\{\s*(\w+)\s*\}\}", replace, template)
 
 
 
@@ -304,14 +297,7 @@ def save_exploration(
     slug = _slugify_question(question)
     fpath = explorations_dir / f"{today}_{slug}.md"
 
-    # 파일명 충돌 처리
-    if fpath.exists():
-        base = f"{today}_{slug}"
-        counter = 2
-        while fpath.exists():
-            fpath = explorations_dir / f"{base}_{counter}.md"
-            counter += 1
-
+    fpath = find_unique_path(fpath)
     fpath.write_text(exploration_content, encoding="utf-8")
     logger.info(f"탐색 결과 저장: {fpath}")
 

@@ -16,13 +16,13 @@ python-docx로 .docx 문서 파싱 → 마크다운 변환
 import hashlib
 import logging
 import re
-import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
 
 from scripts.token_counter import estimate_tokens, load_settings
+from scripts.utils import slugify as _slugify
 
 logger = logging.getLogger(__name__)
 
@@ -35,16 +35,6 @@ HEADING_STYLE_MAP: dict[str, str] = {
     "heading 5": "#####",
     "heading 6": "######",
 }
-
-
-def _slugify(text: str, max_len: int = 60) -> str:
-    """텍스트를 파일명용 슬러그로 변환합니다."""
-    text = unicodedata.normalize("NFKD", text)
-    text = re.sub(r"[^\w\s가-힣]", "", text, flags=re.UNICODE)
-    text = re.sub(r"\s+", "-", text.strip())
-    text = text.lower()
-    text = re.sub(r"-+", "-", text).strip("-")
-    return text[:max_len] if text else "document"
 
 
 # ──────────────────────────────────────────────

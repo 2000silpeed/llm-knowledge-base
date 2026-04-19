@@ -51,6 +51,7 @@ from scripts.token_counter import (
     load_settings,
     parse_frontmatter,
 )
+from scripts.utils import find_unique_path, render_template as _render
 
 logger = logging.getLogger(__name__)
 
@@ -68,13 +69,6 @@ def _load_prompts(prompts_path: Path | str | None = None) -> dict:
         prompts_path = _DEFAULT_PROMPTS_PATH
     with Path(prompts_path).open(encoding="utf-8") as f:
         return yaml.safe_load(f)
-
-
-def _render(template: str, variables: dict) -> str:
-    def replace(m: re.Match) -> str:
-        key = m.group(1).strip()
-        return str(variables.get(key, m.group(0)))
-    return re.sub(r"\{\{\s*(\w+)\s*\}\}", replace, template)
 
 
 def _concept_to_filename(concept: str) -> str:
@@ -302,10 +296,7 @@ def _save_conflict_report(
     slug = _concept_to_filename(concept_name)
     out_path = conflicts_dir / f"{today}_{slug}.md"
 
-    idx = 2
-    while out_path.exists():
-        out_path = conflicts_dir / f"{today}_{slug}_{idx}.md"
-        idx += 1
+    out_path = find_unique_path(out_path)
 
     content = (
         f"---\n"

@@ -13,7 +13,6 @@ URL → trafilatura로 본문 추출 → 마크다운 변환
 import hashlib
 import logging
 import re
-import unicodedata
 import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,7 +21,9 @@ import requests
 import trafilatura
 import yaml
 
+from scripts.constants import MIME_TO_EXT
 from scripts.token_counter import load_settings
+from scripts.utils import slugify as _slugify
 
 # 동적 페이지 판정 임계값 (문자 수 기준)
 _MIN_CONTENT_LENGTH = 200
@@ -73,18 +74,6 @@ logger = logging.getLogger(__name__)
 _IMG_PATTERN = re.compile(r'!\[([^\]]*)\]\((https?://[^)]+)\)')
 
 
-def _slugify(text: str, max_len: int = 60) -> str:
-    """텍스트를 파일명용 슬러그로 변환합니다."""
-    # 유니코드 정규화 → ASCII 변환 시도
-    text = unicodedata.normalize("NFKD", text)
-    # 알파벳, 숫자, 한글, 공백 유지 / 나머지 제거
-    text = re.sub(r"[^\w\s가-힣]", "", text, flags=re.UNICODE)
-    text = re.sub(r"\s+", "-", text.strip())
-    text = text.lower()
-    text = re.sub(r"-+", "-", text).strip("-")
-    return text[:max_len] if text else "article"
-
-
 def _slug_from_url(url: str) -> str:
     """URL에서 슬러그를 추출합니다."""
     parsed = urllib.parse.urlparse(url)
@@ -112,14 +101,7 @@ def _download_image(url: str, images_dir: Path) -> str | None:
 
         # Content-Type에서 확장자 추정
         content_type = resp.headers.get("content-type", "")
-        ext_map = {
-            "image/jpeg": ".jpg",
-            "image/png": ".png",
-            "image/gif": ".gif",
-            "image/webp": ".webp",
-            "image/svg+xml": ".svg",
-        }
-        ext = ext_map.get(content_type.split(";")[0].strip(), ".jpg")
+        ext = MIME_TO_EXT.get(content_type.split(";")[0].strip(), ".jpg")
 
         # URL 해시로 파일명 결정 (중복 방지)
         url_hash = hashlib.md5(url.encode()).hexdigest()[:12]
